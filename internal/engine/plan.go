@@ -14,6 +14,7 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 	req := source.ScanRequest{Table: src.Name}
 	single := len(collectSources(stmt)) == 1
 	cols := columnSet(ts)
+	have := map[string]bool{}
 
 	for _, p := range stmt.Where {
 		if !attributable(p.Table, src, single) || !cols[p.Column] {
@@ -21,8 +22,14 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 		}
 		if f, ok := toFilter(p); ok {
 			req.Filters = append(req.Filters, f)
+			have[p.Column] = true
 		}
 	}
+
+	// Infer equality filters across equi-joins: if this source's column is joined
+	// to another column that has a literal equality filter, that literal also
+	// applies here (e.g. `r.name = i.repo` + `i.repo = 'go'` ⇒ `r.name = 'go'`).
+	req.Filters = append(req.Filters, inferJoinFilters(stmt, src, cols, have)...)
 
 	for _, o := range stmt.OrderBy {
 		if o.Column == "" || !attributable(o.Table, src, single) || !cols[o.Column] {
@@ -43,6 +50,89 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 		}
 	}
 	return req
+}
+
+// colRef identifies a qualified column (qualifier.column).
+type colRef struct{ table, column string }
+
+// inferJoinFilters derives equality filters for src by propagating literal
+// equalities through equi-join keys. For every `A = B` join key where one side
+// is a column of src and the other side has a literal `= value` filter, the
+// value is pushed to src too. have records src columns that already carry a
+// filter, so inference never duplicates one.
+func inferJoinFilters(stmt *sqlparse.Select, src sqlparse.Source, cols, have map[string]bool) []source.Filter {
+	literals := literalEqualities(stmt)
+	pairs := equiJoinPairs(stmt)
+
+	onSrc := func(r colRef) bool {
+		return (r.table == src.Alias || r.table == src.Name) && cols[r.column]
+	}
+
+	var out []source.Filter
+	add := func(column string, v *sqlparse.Value) {
+		if have[column] {
+			return
+		}
+		val, ok := literalValue(v)
+		if !ok {
+			return
+		}
+		have[column] = true
+		out = append(out, source.Filter{Column: column, Op: sqlparse.OpEq, Value: val})
+	}
+
+	for _, p := range pairs {
+		a, b := p[0], p[1]
+		if onSrc(a) {
+			if v, ok := literals[b]; ok {
+				add(a.column, v)
+			}
+		}
+		if onSrc(b) {
+			if v, ok := literals[a]; ok {
+				add(b.column, v)
+			}
+		}
+	}
+	return out
+}
+
+// literalEqualities maps each qualified column with a `= literal` predicate to
+// its value (only qualified predicates participate in cross-source inference).
+func literalEqualities(stmt *sqlparse.Select) map[colRef]*sqlparse.Value {
+	out := map[colRef]*sqlparse.Value{}
+	collect := func(ps []sqlparse.Predicate) {
+		for i := range ps {
+			p := &ps[i]
+			if p.Op == sqlparse.OpEq && p.Value != nil && p.Table != "" {
+				out[colRef{p.Table, p.Column}] = p.Value
+			}
+		}
+	}
+	collect(stmt.Where)
+	for i := range stmt.Joins {
+		collect(stmt.Joins[i].On)
+	}
+	return out
+}
+
+// equiJoinPairs returns the column-to-column equality pairs from JOIN ON clauses
+// and the WHERE clause.
+func equiJoinPairs(stmt *sqlparse.Select) [][2]colRef {
+	var out [][2]colRef
+	collect := func(ps []sqlparse.Predicate) {
+		for i := range ps {
+			p := &ps[i]
+			if p.Op == sqlparse.OpEq && p.RefColumn != "" && p.Table != "" && p.RefTable != "" {
+				out = append(out, [2]colRef{{p.Table, p.Column}, {p.RefTable, p.RefColumn}})
+			}
+		}
+	}
+	collect(stmt.Where)
+	for i := range stmt.Joins {
+		collect(stmt.Joins[i].On)
+	}
+	return out
 }
 
 // attributable reports whether a predicate/order term written with the given

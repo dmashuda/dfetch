@@ -222,13 +222,19 @@ func (o Operator) String() string {
 //   - IN / NOT IN: Values holds the list, Value nil.
 //   - BETWEEN / NOT BETWEEN: Values holds [low, high], Value nil.
 //   - IS NULL / IS NOT NULL: both Value and Values are nil.
+//   - column-to-column comparison (e.g. a join key "a.x = b.y"): RefTable/
+//     RefColumn hold the right-hand column and Value/Values are nil.
 type Predicate struct {
 	Table  string // column's table qualifier ("" if unqualified)
 	Column string
 	Op     Operator
 	Value  *Value  // single right-hand value (see above)
 	Values []Value // multiple right-hand values: IN list, or BETWEEN [low, high]
-	Raw    string  // always set: original text of the conjunct
+	// RefTable/RefColumn hold the right-hand column when the comparison is
+	// column-to-column (both Value and Values are nil).
+	RefTable  string
+	RefColumn string
+	Raw       string // always set: original text of the conjunct
 }
 
 // ValueKind distinguishes a literal from a bind parameter. It is an enum so

@@ -272,17 +272,27 @@ func TestASTPredicateBindAndNull(t *testing.T) {
 }
 
 func TestASTUnstructuredPredicatesKeepRaw(t *testing.T) {
-	// Top-level OR is not split; column-to-column and function predicates are
-	// preserved as raw text rather than dropped.
+	// Top-level OR is not split; it is preserved as raw text rather than dropped.
 	s := mustParse(t, "SELECT * FROM a JOIN b ON a.id = b.id WHERE p = 1 OR q = 2")
 	require.Len(t, s.Where, 1)
 	assert.Empty(t, s.Where[0].Op)
 	assert.Equal(t, "p = 1 OR q = 2", s.Where[0].Raw)
+}
 
+func TestASTColumnToColumnPredicate(t *testing.T) {
+	// A join key a.id = b.id is a structured column-to-column comparison.
+	s := mustParse(t, "SELECT * FROM a JOIN b ON a.id = b.id")
 	require.Len(t, s.Joins, 1)
 	require.Len(t, s.Joins[0].On, 1)
-	assert.Empty(t, s.Joins[0].On[0].Op) // a.id = b.id is column-to-column
-	assert.Equal(t, "a.id = b.id", s.Joins[0].On[0].Raw)
+
+	on := s.Joins[0].On[0]
+	assert.Equal(t, OpEq, on.Op)
+	assert.Equal(t, "a", on.Table)
+	assert.Equal(t, "id", on.Column)
+	assert.Equal(t, "b", on.RefTable)
+	assert.Equal(t, "id", on.RefColumn)
+	assert.Nil(t, on.Value)
+	assert.Equal(t, "a.id = b.id", on.Raw)
 }
 
 func TestASTDistinct(t *testing.T) {

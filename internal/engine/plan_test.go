@@ -50,6 +50,40 @@ func TestPlanScanLimitNotPushedForMultiSource(t *testing.T) {
 	assert.Nil(t, req.Limit, "LIMIT must not be pushed to one source of a multi-source query")
 }
 
+func TestPlanScanInfersJoinPartnerFilters(t *testing.T) {
+	// repos has no direct owner/name filter; they are inferred from the join keys
+	// r.owner=i.owner / r.name=i.repo plus issues' literal filters.
+	q, err := sqlparse.Parse(`
+		SELECT i.number, r.full_name
+		FROM github.issues i
+		JOIN github.repos r ON r.owner = i.owner AND r.name = i.repo
+		WHERE i.owner = 'golang' AND i.repo = 'go' AND i.state = 'open'`)
+	require.NoError(t, err)
+
+	reposSrc := q.Stmt.From[1] // r
+	require.Equal(t, "repos", reposSrc.Name)
+	reposTS := source.TableSchema{Name: "repos", Columns: []source.Column{{Name: "owner"}, {Name: "name"}, {Name: "full_name"}}}
+
+	req := planScan(q.Stmt, reposSrc, reposTS)
+	assert.ElementsMatch(t, []source.Filter{
+		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
+		{Column: "name", Op: sqlparse.OpEq, Value: "go"},
+	}, req.Filters)
+}
+
+func TestPlanScanInferenceDoesNotDuplicateDirectFilter(t *testing.T) {
+	q, err := sqlparse.Parse(`
+		SELECT * FROM github.issues i
+		JOIN github.repos r ON r.name = i.repo
+		WHERE i.repo = 'go' AND r.name = 'go'`)
+	require.NoError(t, err)
+
+	reposTS := source.TableSchema{Name: "repos", Columns: []source.Column{{Name: "name"}}}
+	req := planScan(q.Stmt, q.Stmt.From[1], reposTS)
+	// Only one filter on name, even though it's both direct and inferable.
+	assert.Len(t, req.Filters, 1)
+}
+
 func TestPlanScanQualifiedColumnAttribution(t *testing.T) {
 	q, err := sqlparse.Parse("SELECT * FROM github.issues i WHERE i.owner = 'golang' AND i.state = 'open'")
 	require.NoError(t, err)

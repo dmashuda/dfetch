@@ -431,6 +431,13 @@ func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
 			return Predicate{Raw: raw}
 		}
 		return Predicate{Table: r.table, Column: r.col, Op: flipOp(op), Value: l.val, Raw: raw}
+	case l.isCol && r.isCol:
+		// Column-to-column comparison (e.g. a join key). Structured so a planner
+		// can read the pair; rendering falls back to Raw.
+		return Predicate{
+			Table: l.table, Column: l.col, Op: op,
+			RefTable: r.table, RefColumn: r.col, Raw: raw,
+		}
 	default:
 		return Predicate{Raw: raw}
 	}
