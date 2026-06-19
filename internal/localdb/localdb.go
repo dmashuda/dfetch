@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/XSAM/otelsql"
@@ -16,13 +18,17 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB is a per-request local SQLite database. Every operation runs on a single
-// pinned connection: with an in-memory SQLite database each connection is a
-// separate database, so attachments and tables created on one connection are
-// invisible to another. Pinning keeps them all in the same database.
+// DB is a per-request local SQLite database. It is backed by temporary files on
+// disk (under a per-request temp directory) rather than memory, so large result
+// sets spill to disk instead of consuming RAM; the directory is removed on Close.
+//
+// Every operation runs on a single pinned connection: attached databases are a
+// per-connection property in SQLite, so the schemas attached on one connection
+// are invisible to another. Pinning keeps them all on the same connection.
 type DB struct {
 	db       *sql.DB
 	conn     *sql.Conn
+	dir      string // per-request temp dir holding the db files; removed on Close
 	attached map[string]struct{}
 }
 
@@ -32,14 +38,21 @@ type Result struct {
 	Rows    [][]any
 }
 
-// Open creates a fresh per-request in-memory SQLite database and pins a
-// connection to it.
+// Open creates a fresh per-request SQLite database backed by a temporary file on
+// disk and pins a connection to it. The temp file (and any attached-schema files)
+// live under a per-request directory that Close removes.
 func Open(ctx context.Context) (*DB, error) {
+	dir, err := os.MkdirTemp("", "dfetch-localdb-")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir for local db: %w", err)
+	}
+
 	// otelsql wraps the sqlite3 driver so each statement becomes a span (a no-op
 	// until a tracer provider is installed).
-	db, err := otelsql.Open("sqlite3", ":memory:",
+	db, err := otelsql.Open("sqlite3", filepath.Join(dir, "main.db"),
 		otelsql.WithAttributes(semconv.DBSystemNameKey.String("sqlite")))
 	if err != nil {
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
@@ -47,19 +60,22 @@ func Open(ctx context.Context) (*DB, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		_ = db.Close()
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close()
 		_ = db.Close()
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	return &DB{db: db, conn: conn, attached: map[string]struct{}{}}, nil
+	return &DB{db: db, conn: conn, dir: dir, attached: map[string]struct{}{}}, nil
 }
 
-// Attach attaches a fresh in-memory database under the given schema name so a
-// schema-qualified table (e.g. github.issues) can be created. It is idempotent;
-// an empty schema (the default "main") is a no-op.
+// Attach attaches a fresh database, backed by a temporary file in the per-request
+// directory, under the given schema name so a schema-qualified table (e.g.
+// github.issues) can be created. It is idempotent; an empty schema (the default
+// "main") is a no-op.
 func (db *DB) Attach(ctx context.Context, schema string) error {
 	if schema == "" || schema == "main" {
 		return nil
@@ -67,7 +83,11 @@ func (db *DB) Attach(ctx context.Context, schema string) error {
 	if _, ok := db.attached[schema]; ok {
 		return nil
 	}
-	if _, err := db.conn.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS "+quoteIdent(schema)); err != nil {
+	// Name the file by attach index, not the schema, so arbitrary schema names
+	// never have to be valid (or unique) filenames.
+	path := filepath.Join(db.dir, fmt.Sprintf("schema_%d.db", len(db.attached)))
+	stmt := fmt.Sprintf("ATTACH DATABASE '%s' AS %s", strings.ReplaceAll(path, "'", "''"), quoteIdent(schema))
+	if _, err := db.conn.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("attaching schema %q: %w", schema, err)
 	}
 	db.attached[schema] = struct{}{}
@@ -179,7 +199,8 @@ func (db *DB) Query(ctx context.Context, query string) (*Result, error) {
 	return &Result{Columns: cols, Rows: out}, nil
 }
 
-// Close releases the pinned connection and the database.
+// Close releases the pinned connection and the database, then removes the
+// temporary directory holding the on-disk db files.
 func (db *DB) Close() error {
 	var err error
 	if db.conn != nil {
@@ -188,6 +209,11 @@ func (db *DB) Close() error {
 	if db.db != nil {
 		if dbErr := db.db.Close(); err == nil {
 			err = dbErr
+		}
+	}
+	if db.dir != "" {
+		if rmErr := os.RemoveAll(db.dir); err == nil {
+			err = rmErr
 		}
 	}
 	return err
