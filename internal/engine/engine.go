@@ -13,6 +13,11 @@ import (
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
+	"github.com/dmashuda/dfetch/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Engine resolves dfetch queries against configured connectors, keyed by the SQL
@@ -66,55 +71,77 @@ func (e *Engine) Schemas() map[string][]source.TableSchema {
 
 // Run executes the full pipeline for a SQL query (SQLite syntax).
 func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "engine.Run",
+		trace.WithAttributes(semconv.DBQueryText(sql)))
+	defer span.End()
+
 	q, err := sqlparse.Parse(sql)
 	if err != nil {
-		return nil, err
+		return nil, recordErr(span, err)
 	}
 
 	db, err := localdb.Open(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("opening local database: %w", err)
+		return nil, recordErr(span, fmt.Errorf("opening local database: %w", err))
 	}
 	defer func() { _ = db.Close() }()
 
 	for _, src := range collectSources(q.Stmt) {
 		if err := e.loadSource(ctx, db, q.Stmt, src); err != nil {
-			return nil, err
+			return nil, recordErr(span, err)
 		}
 	}
 
 	res, err := db.Query(ctx, q.Raw)
 	if err != nil {
-		return nil, fmt.Errorf("resolving query: %w", err)
+		return nil, recordErr(span, fmt.Errorf("resolving query: %w", err))
 	}
 	return &Result{Columns: res.Columns, Rows: res.Rows}, nil
+}
+
+// recordErr marks span as failed and returns err unchanged, for inline use.
+func recordErr(span trace.Span, err error) error {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	return err
 }
 
 // loadSource fetches one source table (pushing down what it can) and loads it
 // into the local database under its schema.
 func (e *Engine) loadSource(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, src sqlparse.Source) error {
+	ctx, span := telemetry.Tracer().Start(ctx, "engine.loadSource",
+		trace.WithAttributes(
+			attribute.String("db.namespace", src.Schema),
+			attribute.String("db.collection.name", src.Name),
+		))
+	defer span.End()
+
 	if src.Schema == "" {
-		return fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name)
+		return recordErr(span, fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name))
 	}
 	conn, ok := e.connectors[src.Schema]
 	if !ok {
-		return fmt.Errorf("no connector for schema %q", src.Schema)
+		return recordErr(span, fmt.Errorf("no connector for schema %q", src.Schema))
 	}
 	ts, ok := tableSchema(conn, src.Name)
 	if !ok {
-		return fmt.Errorf("connector %q has no table %q", src.Schema, src.Name)
+		return recordErr(span, fmt.Errorf("connector %q has no table %q", src.Schema, src.Name))
 	}
 
-	rows, err := conn.Scan(ctx, planScan(stmt, src, ts))
+	// Wrap the connector call so its HTTP client spans nest under connector.scan.
+	scanCtx, scanSpan := telemetry.Tracer().Start(ctx, "connector.scan",
+		trace.WithAttributes(attribute.String("db.collection.name", src.Name)))
+	rows, err := conn.Scan(scanCtx, planScan(stmt, src, ts))
+	scanSpan.End()
 	if err != nil {
-		return fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err)
+		return recordErr(span, fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err))
 	}
 
 	if err := db.Attach(ctx, src.Schema); err != nil {
-		return err
+		return recordErr(span, err)
 	}
 	if err := db.CreateTable(ctx, src.Schema, ts); err != nil {
-		return err
+		return recordErr(span, err)
 	}
 	return db.Insert(ctx, src.Schema, src.Name, rows.Columns, rows.Rows)
 }

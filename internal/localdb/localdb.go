@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/XSAM/otelsql"
 	"github.com/dmashuda/dfetch/internal/source"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+
 	// Registered for its side effect: the "sqlite3" database/sql driver.
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -32,7 +35,10 @@ type Result struct {
 // Open creates a fresh per-request in-memory SQLite database and pins a
 // connection to it.
 func Open(ctx context.Context) (*DB, error) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	// otelsql wraps the sqlite3 driver so each statement becomes a span (a no-op
+	// until a tracer provider is installed).
+	db, err := otelsql.Open("sqlite3", ":memory:",
+		otelsql.WithAttributes(semconv.DBSystemNameKey.String("sqlite")))
 	if err != nil {
 		return nil, err
 	}
