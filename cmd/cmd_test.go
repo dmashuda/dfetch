@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -14,11 +17,6 @@ func TestVersionCommand(t *testing.T) {
 	rootCmd.SetErr(&out)
 	rootCmd.SetArgs([]string{"version"})
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("version command failed: %v", err)
-	}
-
-	if got := strings.TrimSpace(out.String()); got != "v9.9.9-test" {
-		t.Fatalf("version output = %q, want %q", got, "v9.9.9-test")
-	}
+	require.NoError(t, rootCmd.Execute())
+	assert.Equal(t, "v9.9.9-test", strings.TrimSpace(out.String()))
 }

@@ -10,18 +10,10 @@ linters:
     - prealloc
     - unconvert
     - unparam
-  exclusions:
-    generated: lax
-    paths:
-      - internal/sqlparse/gen
 
 formatters:
   enable:
     - gofumpt
-  exclusions:
-    generated: lax
-    paths:
-      - internal/sqlparse/gen
 
 run:
   timeout: 5m

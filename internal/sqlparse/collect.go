@@ -7,13 +7,15 @@ import (
 )
 
 // tableCollector walks a parsed statement and records the base tables it
-// references along with the CTE names it defines. The external tables to fetch
-// are the referenced tables minus the CTE names (CTEs are defined inline) and
-// minus table-valued functions (e.g. json_each), which are not data sources.
+// references along with the CTE names it defines and the columns it references.
+// The external tables to fetch are the referenced tables minus the CTE names
+// (CTEs are defined inline) and minus table-valued functions (e.g. json_each),
+// which are not data sources.
 type tableCollector struct {
 	*gen.BaseSQLiteParserListener
 	refs map[string]struct{}
 	cte  map[string]struct{}
+	cols map[string]struct{}
 }
 
 func newTableCollector() *tableCollector {
@@ -21,6 +23,7 @@ func newTableCollector() *tableCollector {
 		BaseSQLiteParserListener: &gen.BaseSQLiteParserListener{},
 		refs:                     map[string]struct{}{},
 		cte:                      map[string]struct{}{},
+		cols:                     map[string]struct{}{},
 	}
 }
 
@@ -40,6 +43,18 @@ func (c *tableCollector) EnterTable_or_subquery(ctx *gen.Table_or_subqueryContex
 	}
 }
 
+// The grammar uses two column-reference rules: qualified refs (table.column)
+// and join/USING lists use column_name, while bare columns inside expressions
+// use column_name_excluding_string. Collect both.
+
+func (c *tableCollector) EnterColumn_name(ctx *gen.Column_nameContext) {
+	c.cols[unquoteIdent(ctx.GetText())] = struct{}{}
+}
+
+func (c *tableCollector) EnterColumn_name_excluding_string(ctx *gen.Column_name_excluding_stringContext) {
+	c.cols[unquoteIdent(ctx.GetText())] = struct{}{}
+}
+
 // external returns the referenced tables that are not CTE-defined.
 func (c *tableCollector) external() []string {
 	out := make([]string, 0, len(c.refs))
@@ -47,6 +62,16 @@ func (c *tableCollector) external() []string {
 		if _, isCTE := c.cte[name]; isCTE {
 			continue
 		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// columns returns the referenced column names. This is a flat set across the
+// whole query; mapping each column to a specific table is future work.
+func (c *tableCollector) columns() []string {
+	out := make([]string, 0, len(c.cols))
+	for name := range c.cols {
 		out = append(out, name)
 	}
 	return out

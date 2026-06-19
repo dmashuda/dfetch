@@ -25,6 +25,11 @@ type Query struct {
 	// tables minus CTE names and table-valued functions, deduped and sorted,
 	// with identifiers unquoted.
 	Tables []string
+	// Columns are the column names the query references, deduped and sorted,
+	// with identifiers unquoted. This is a flat set across the whole query;
+	// mapping each column to a specific table is future work. SELECT * yields
+	// no columns (the set of columns is not known syntactically).
+	Columns []string
 }
 
 // Parse lexes, parses, and validates a single read-only SELECT statement and
@@ -54,13 +59,16 @@ func Parse(raw string) (*Query, error) {
 	c := newTableCollector()
 	antlr.NewParseTreeWalker().Walk(c, tree)
 
-	tables := c.external()
-	if len(tables) == 0 {
-		return &Query{Raw: raw}, nil
+	q := &Query{Raw: raw}
+	if tables := c.external(); len(tables) > 0 {
+		sort.Strings(tables)
+		q.Tables = tables
 	}
-	sort.Strings(tables)
-
-	return &Query{Raw: raw, Tables: tables}, nil
+	if cols := c.columns(); len(cols) > 0 {
+		sort.Strings(cols)
+		q.Columns = cols
+	}
+	return q, nil
 }
 
 // validateReadOnlySelect ensures the parse tree holds exactly one statement and

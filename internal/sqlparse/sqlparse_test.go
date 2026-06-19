@@ -1,8 +1,10 @@
 package sqlparse
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseExtractsTables(t *testing.T) {
@@ -29,19 +31,86 @@ func TestParseExtractsTables(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			q, err := Parse(tc.sql)
-			if err != nil {
-				t.Fatalf("Parse(%q) error: %v", tc.sql, err)
-			}
-			if q.Raw != tc.sql {
-				t.Errorf("Raw = %q, want %q", q.Raw, tc.sql)
-			}
-			want := tc.want
-			if len(want) == 0 {
-				want = nil
-			}
-			if got := q.Tables; !reflect.DeepEqual(got, want) {
-				t.Errorf("Tables = %#v, want %#v", got, want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.sql, q.Raw)
+			assert.Equal(t, tc.want, q.Tables)
+		})
+	}
+}
+
+// TestParseComplexJoins exercises multi-table and nested joins to confirm every
+// referenced source table is discovered.
+func TestParseComplexJoins(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{
+			"three way inner join",
+			`SELECT a.x, b.y, c.z FROM a
+			   JOIN b ON a.id = b.aid
+			   JOIN c ON c.bid = b.id`,
+			[]string{"a", "b", "c"},
+		},
+		{
+			"left and inner mix",
+			`SELECT * FROM orders o
+			   LEFT JOIN customers cu ON cu.id = o.customer_id
+			   INNER JOIN items i ON i.order_id = o.id`,
+			[]string{"customers", "items", "orders"},
+		},
+		{
+			"cross join",
+			"SELECT * FROM a CROSS JOIN b",
+			[]string{"a", "b"},
+		},
+		{
+			"join against subquery",
+			`SELECT * FROM a
+			   JOIN (SELECT id FROM b JOIN c ON b.cid = c.id) sub ON sub.id = a.id`,
+			[]string{"a", "b", "c"},
+		},
+		{
+			"cte joined with base and subquery",
+			`WITH recent AS (SELECT * FROM events)
+			 SELECT * FROM recent r
+			   JOIN users u ON u.id = r.user_id
+			   LEFT JOIN (SELECT * FROM regions) rg ON rg.id = u.region_id`,
+			[]string{"events", "regions", "users"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := Parse(tc.sql)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, q.Tables)
+		})
+	}
+}
+
+// TestParseExtractsColumns confirms referenced column names are collected from
+// the projection, JOIN/USING clauses, and WHERE predicates, while SELECT *
+// yields no columns.
+func TestParseExtractsColumns(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"projection", "SELECT name, age FROM users", []string{"age", "name"}},
+		{"qualified and where", "SELECT a.x, b.y FROM a JOIN b ON a.id = b.aid WHERE b.y > 3", []string{"aid", "id", "x", "y"}},
+		{"using clause", "SELECT id FROM a JOIN b USING (id)", []string{"id"}},
+		{"star has no columns", "SELECT * FROM t", nil},
+		{"qualified star has no columns", "SELECT t.* FROM t", nil},
+		{"group by and having", "SELECT dept, COUNT(*) FROM emp GROUP BY dept HAVING COUNT(emp_id) > 1", []string{"dept", "emp_id"}},
+		{"order by", "SELECT name FROM users ORDER BY created_at DESC", []string{"created_at", "name"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := Parse(tc.sql)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, q.Columns)
 		})
 	}
 }
@@ -66,21 +135,17 @@ func TestParseRejects(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if q, err := Parse(tc.sql); err == nil {
-				t.Fatalf("Parse(%q) = %#v, want error", tc.sql, q)
-			}
+			q, err := Parse(tc.sql)
+			require.Error(t, err)
+			assert.Nil(t, q)
 		})
 	}
 }
 
 func TestParseTrailingSemicolonAllowed(t *testing.T) {
 	q, err := Parse("SELECT * FROM users;")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !reflect.DeepEqual(q.Tables, []string{"users"}) {
-		t.Fatalf("Tables = %#v, want [users]", q.Tables)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, []string{"users"}, q.Tables)
 }
 
 func TestUnquoteIdent(t *testing.T) {
@@ -95,8 +160,6 @@ func TestUnquoteIdent(t *testing.T) {
 		"unclosed": "unclosed",
 	}
 	for in, want := range cases {
-		if got := unquoteIdent(in); got != want {
-			t.Errorf("unquoteIdent(%q) = %q, want %q", in, got, want)
-		}
+		assert.Equalf(t, want, unquoteIdent(in), "unquoteIdent(%q)", in)
 	}
 }

@@ -2,34 +2,30 @@ package source
 
 import (
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultRegistryBuildsCSV(t *testing.T) {
 	r := DefaultRegistry()
 	s, err := r.Build("csv", "users", map[string]any{"path": "./users.csv"})
-	if err != nil {
-		t.Fatalf("Build returned error: %v", err)
-	}
-	if _, err := s.Schema(context.Background()); !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented from stub, got %v", err)
-	}
+	require.NoError(t, err)
+
+	_, err = s.Schema(context.Background())
+	assert.ErrorIs(t, err, ErrNotImplemented)
 }
 
 func TestRegistryBuildUnknownType(t *testing.T) {
-	if _, err := NewRegistry().Build("nope", "t", nil); err == nil {
-		t.Fatal("expected error for unknown source type")
-	}
+	_, err := NewRegistry().Build("nope", "t", nil)
+	assert.Error(t, err)
 }
 
 func TestRegistryRegisterDuplicatePanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on duplicate registration")
-		}
-	}()
 	r := NewRegistry()
 	r.Register("csv", NewCSVSource)
-	r.Register("csv", NewCSVSource)
+	assert.Panics(t, func() {
+		r.Register("csv", NewCSVSource)
+	})
 }
