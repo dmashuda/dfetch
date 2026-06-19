@@ -4,18 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadMissingDefaultReturnsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	cfg, err := Load("")
-	if err != nil {
-		t.Fatalf("Load(\"\") returned error: %v", err)
-	}
-	if len(cfg.Sources) != 0 {
-		t.Fatalf("expected empty config, got %d sources", len(cfg.Sources))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Sources)
 }
 
 func TestLoadParsesSources(t *testing.T) {
@@ -32,27 +31,17 @@ sources:
     params:
       url: https://example.com/orders.json
 `
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
-	}
-	if len(cfg.Sources) != 2 {
-		t.Fatalf("expected 2 sources, got %d", len(cfg.Sources))
-	}
-	if cfg.Sources[0].Table != "users" || cfg.Sources[0].Type != "csv" {
-		t.Fatalf("unexpected first source: %+v", cfg.Sources[0])
-	}
-	if got := cfg.Sources[0].Params["path"]; got != "./users.csv" {
-		t.Fatalf("unexpected param path: %v", got)
-	}
+	require.NoError(t, err)
+	require.Len(t, cfg.Sources, 2)
+	assert.Equal(t, "users", cfg.Sources[0].Table)
+	assert.Equal(t, "csv", cfg.Sources[0].Type)
+	assert.Equal(t, "./users.csv", cfg.Sources[0].Params["path"])
 }
 
 func TestLoadMissingExplicitPathErrors(t *testing.T) {
-	if _, err := Load(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
-		t.Fatal("expected error for missing explicit config path")
-	}
+	_, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
+	assert.Error(t, err)
 }

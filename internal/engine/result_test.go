@@ -3,6 +3,9 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func sampleResult() *Result {
@@ -14,39 +17,26 @@ func sampleResult() *Result {
 
 func TestResultWriteTable(t *testing.T) {
 	var sb strings.Builder
-	if err := sampleResult().Write(&sb, "table"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, sampleResult().Write(&sb, "table"))
 	out := sb.String()
-	if !strings.Contains(out, "id\tname") || !strings.Contains(out, "1\talice") {
-		t.Fatalf("unexpected table output:\n%s", out)
-	}
+	assert.Contains(t, out, "id\tname")
+	assert.Contains(t, out, "1\talice")
 }
 
 func TestResultWriteJSON(t *testing.T) {
 	var sb strings.Builder
-	if err := sampleResult().Write(&sb, "json"); err != nil {
-		t.Fatal(err)
-	}
-	out := sb.String()
-	if !strings.Contains(out, `"name": "alice"`) {
-		t.Fatalf("unexpected json output:\n%s", out)
-	}
+	require.NoError(t, sampleResult().Write(&sb, "json"))
+	assert.Contains(t, sb.String(), `"name": "alice"`)
 }
 
 func TestResultWriteCSV(t *testing.T) {
 	var sb strings.Builder
-	if err := sampleResult().Write(&sb, "csv"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, sampleResult().Write(&sb, "csv"))
 	out := sb.String()
-	if !strings.Contains(out, "id,name") || !strings.Contains(out, "2,bob") {
-		t.Fatalf("unexpected csv output:\n%s", out)
-	}
+	assert.Contains(t, out, "id,name")
+	assert.Contains(t, out, "2,bob")
 }
 
 func TestResultWriteUnknownFormat(t *testing.T) {
-	if err := sampleResult().Write(&strings.Builder{}, "xml"); err == nil {
-		t.Fatal("expected error for unknown format")
-	}
+	assert.Error(t, sampleResult().Write(&strings.Builder{}, "xml"))
 }

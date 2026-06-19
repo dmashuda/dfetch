@@ -57,7 +57,19 @@ make build      # build ./bin/dfetch
 make test       # run tests
 make coverage   # run tests with the coverage gate
 make lint       # golangci-lint
+make generate   # regenerate the ANTLR SQLite parser (requires Java)
 ```
+
+### Testing
+
+Tests use [testify](https://github.com/stretchr/testify) (`require` for fatal
+assertions, `assert` for non-fatal ones). Use it for new tests rather than
+hand-written `if got != want { t.Fatalf(...) }` checks.
+
+The SQL parser under `internal/sqlparse` is generated with ANTLR; the generated
+code under `internal/sqlparse/gen` is committed, so normal builds and CI need no
+Java. golangci-lint skips it automatically (generated-file detection), and the
+`vet`/`coverage` make targets exclude it.
 
 ## Project layout
 
@@ -65,7 +77,7 @@ make lint       # golangci-lint
 cmd/                 cobra CLI: root, query, version
 internal/config      YAML config loading
 internal/source      Source interface + type registry (csv, ...)
-internal/sqlparse    SQL parse/validate + table extraction
+internal/sqlparse    SQL parse/validate + table/column extraction + typed AST + SQL rendering
 internal/localdb     per-request local SQLite database
 internal/engine      orchestration: parse -> fetch -> load -> resolve
 ```
