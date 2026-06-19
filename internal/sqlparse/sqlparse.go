@@ -1,14 +1,88 @@
-// Package sqlparse parses and validates SQLite-syntax queries and reports the
-// table names a query references, so the engine knows which sources to fetch.
+// Package sqlparse lexes, parses, and validates the incoming SQL (SQLite
+// syntax) and reports the external tables a query references, so the engine
+// knows which data sources to fetch. It performs syntactic validation only;
+// authoritative semantic validation happens when the query runs against the
+// per-request SQLite database (see internal/localdb).
 package sqlparse
 
-import "errors"
+//go:generate ./scripts/gen-parser.sh
 
-// ErrNotImplemented is returned until real parsing is wired up.
-var ErrNotImplemented = errors.New("not implemented")
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
 
-// ParseAndValidate validates the SQL (SQLite syntax) and returns the set of
-// referenced table names. It is a stub pending implementation.
-func ParseAndValidate(sql string) (tables []string, err error) {
-	return nil, ErrNotImplemented
+	"github.com/antlr4-go/antlr/v4"
+	"github.com/dmashuda/dfetch/internal/sqlparse/gen"
+)
+
+// Query is the validated result of parsing an incoming SQL statement.
+type Query struct {
+	// Raw is the original SQL, run verbatim against the local database later.
+	Raw string
+	// Tables are the external base tables the query references: referenced
+	// tables minus CTE names and table-valued functions, deduped and sorted,
+	// with identifiers unquoted.
+	Tables []string
+}
+
+// Parse lexes, parses, and validates a single read-only SELECT statement and
+// returns the external tables it references. Syntax errors, non-SELECT
+// statements, and multiple statements yield an error.
+func Parse(raw string) (*Query, error) {
+	errs := newErrorCollector()
+
+	lexer := gen.NewSQLiteLexer(antlr.NewInputStream(raw))
+	lexer.RemoveErrorListeners()
+	lexer.AddErrorListener(errs)
+
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+	p := gen.NewSQLiteParser(stream)
+	p.RemoveErrorListeners()
+	p.AddErrorListener(errs)
+
+	tree := p.Parse()
+	if len(errs.msgs) > 0 {
+		return nil, fmt.Errorf("invalid SQL: %s", strings.Join(errs.msgs, "; "))
+	}
+
+	if err := validateReadOnlySelect(tree); err != nil {
+		return nil, err
+	}
+
+	c := newTableCollector()
+	antlr.NewParseTreeWalker().Walk(c, tree)
+
+	tables := c.external()
+	if len(tables) == 0 {
+		return &Query{Raw: raw}, nil
+	}
+	sort.Strings(tables)
+
+	return &Query{Raw: raw, Tables: tables}, nil
+}
+
+// validateReadOnlySelect ensures the parse tree holds exactly one statement and
+// that it is a plain (non-EXPLAIN) SELECT.
+func validateReadOnlySelect(tree gen.IParseContext) error {
+	list := tree.Sql_stmt_list()
+	if list == nil {
+		return errors.New("no SQL statement found")
+	}
+	stmts := list.AllSql_stmt()
+	switch len(stmts) {
+	case 0:
+		return errors.New("no SQL statement found")
+	case 1:
+		// ok
+	default:
+		return errors.New("only a single statement is supported")
+	}
+
+	st := stmts[0]
+	if st.EXPLAIN_() != nil || st.Select_stmt() == nil {
+		return errors.New("only read-only SELECT statements are supported")
+	}
+	return nil
 }
