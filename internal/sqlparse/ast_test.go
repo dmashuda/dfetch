@@ -1,6 +1,7 @@
 package sqlparse
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,73 @@ func mustParse(t *testing.T, sql string) *Select {
 	require.NoError(t, err)
 	require.NotNil(t, q.Stmt)
 	return q.Stmt
+}
+
+func intValue(n int64) *Value {
+	return &Value{Kind: ValueLiteral, Literal: &Literal{Kind: LiteralInteger, Raw: strconv.FormatInt(n, 10), Value: n}}
+}
+
+func stringValue(raw, parsed string) *Value {
+	return &Value{Kind: ValueLiteral, Literal: &Literal{Kind: LiteralString, Raw: raw, Value: parsed}}
+}
+
+// firstValue parses a one-predicate WHERE and returns the comparison's value.
+func firstValue(t *testing.T, sql string) *Value {
+	t.Helper()
+	s := mustParse(t, sql)
+	require.Len(t, s.Where, 1)
+	require.NotNil(t, s.Where[0].Value)
+	return s.Where[0].Value
+}
+
+func TestASTLiteralTypes(t *testing.T) {
+	t.Run("integer", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = 42").Literal
+		require.NotNil(t, lit)
+		assert.Equal(t, LiteralInteger, lit.Kind)
+		assert.Equal(t, int64(42), lit.Value)
+	})
+	t.Run("hex integer", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = 0xFF").Literal
+		assert.Equal(t, LiteralInteger, lit.Kind)
+		assert.Equal(t, int64(255), lit.Value)
+	})
+	t.Run("float", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = 3.5").Literal
+		assert.Equal(t, LiteralFloat, lit.Kind)
+		assert.Equal(t, 3.5, lit.Value)
+	})
+	t.Run("float exponent", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = 1e3").Literal
+		assert.Equal(t, LiteralFloat, lit.Kind)
+		assert.Equal(t, 1000.0, lit.Value)
+	})
+	t.Run("string", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = 'it''s'").Literal
+		assert.Equal(t, LiteralString, lit.Kind)
+		assert.Equal(t, "it's", lit.Value)
+	})
+	t.Run("bool", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = TRUE").Literal
+		assert.Equal(t, LiteralBool, lit.Kind)
+		assert.Equal(t, true, lit.Value)
+	})
+	t.Run("blob", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = X'4142'").Literal
+		assert.Equal(t, LiteralBlob, lit.Kind)
+		assert.Equal(t, []byte("AB"), lit.Value)
+	})
+	t.Run("keyword", func(t *testing.T) {
+		lit := firstValue(t, "SELECT * FROM t WHERE a = CURRENT_TIMESTAMP").Literal
+		assert.Equal(t, LiteralKeyword, lit.Kind)
+		assert.Equal(t, "CURRENT_TIMESTAMP", lit.Value)
+	})
+	t.Run("null via equality stays raw value", func(t *testing.T) {
+		// `a = NULL` is a normal equality whose RHS literal is typed null.
+		lit := firstValue(t, "SELECT * FROM t WHERE a = NULL").Literal
+		assert.Equal(t, LiteralNull, lit.Kind)
+		assert.Nil(t, lit.Value)
+	})
 }
 
 func TestASTProjections(t *testing.T) {
@@ -96,24 +164,24 @@ func TestASTWherePredicates(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.age >= 21 AND status = 'paid' AND name LIKE 'A%' AND qty <> 0")
 	require.Len(t, s.Where, 4)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: OpGte, Value: &Value{Kind: ValueLiteral, Text: "21"}, Raw: "t.age >= 21"}, s.Where[0])
-	assert.Equal(t, Predicate{Column: "status", Op: OpEq, Value: &Value{Kind: ValueLiteral, Text: "'paid'"}, Raw: "status = 'paid'"}, s.Where[1])
-	assert.Equal(t, Predicate{Column: "name", Op: OpLike, Value: &Value{Kind: ValueLiteral, Text: "'A%'"}, Raw: "name LIKE 'A%'"}, s.Where[2])
-	assert.Equal(t, Predicate{Column: "qty", Op: OpNotEq, Value: &Value{Kind: ValueLiteral, Text: "0"}, Raw: "qty <> 0"}, s.Where[3])
+	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: OpGte, Value: intValue(21), Raw: "t.age >= 21"}, s.Where[0])
+	assert.Equal(t, Predicate{Column: "status", Op: OpEq, Value: stringValue("'paid'", "paid"), Raw: "status = 'paid'"}, s.Where[1])
+	assert.Equal(t, Predicate{Column: "name", Op: OpLike, Value: stringValue("'A%'", "A%"), Raw: "name LIKE 'A%'"}, s.Where[2])
+	assert.Equal(t, Predicate{Column: "qty", Op: OpNotEq, Value: intValue(0), Raw: "qty <> 0"}, s.Where[3])
 }
 
 func TestASTPredicateOperatorFlip(t *testing.T) {
 	// value on the left flips the operator so the column leads.
 	s := mustParse(t, "SELECT * FROM t WHERE 100 > t.qty")
 	require.Len(t, s.Where, 1)
-	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: OpLt, Value: &Value{Kind: ValueLiteral, Text: "100"}, Raw: "100 > t.qty"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: OpLt, Value: intValue(100), Raw: "100 > t.qty"}, s.Where[0])
 }
 
 func TestASTPredicateBindAndNull(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.id = :id AND t.deleted IS NULL AND t.name IS NOT NULL")
 	require.Len(t, s.Where, 3)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: OpEq, Value: &Value{Kind: ValueBind, Text: ":id"}, Raw: "t.id = :id"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: OpEq, Value: &Value{Kind: ValueBind, Bind: ":id"}, Raw: "t.id = :id"}, s.Where[0])
 	assert.Equal(t, Predicate{Table: "t", Column: "deleted", Op: OpIsNull, Raw: "t.deleted IS NULL"}, s.Where[1])
 	assert.Equal(t, Predicate{Table: "t", Column: "name", Op: OpIsNotNull, Raw: "t.name IS NOT NULL"}, s.Where[2])
 }

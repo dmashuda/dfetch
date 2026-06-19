@@ -1,6 +1,8 @@
 package sqlparse
 
 import (
+	"encoding/hex"
+	"strconv"
 	"strings"
 
 	"github.com/antlr4-go/antlr/v4"
@@ -198,7 +200,7 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 		// x IS NULL / x IS NOT NULL (the `IS NULL` form; the bare ISNULL/NOTNULL
 		// keywords are handled in the single-operand branch above).
 		if len(bin.AllIS_()) > 0 {
-			if r := classify(comps[1]); r.isVal && r.val.Kind == ValueLiteral && strings.EqualFold(r.val.Text, "null") {
+			if r := classify(comps[1]); r.isVal && r.val.Literal != nil && r.val.Literal.Kind == LiteralNull {
 				op := OpIsNull
 				if len(bin.AllNOT_()) > 0 {
 					op = OpIsNotNull
@@ -298,15 +300,77 @@ func classify(node antlr.Tree) operand {
 	}
 	switch {
 	case base.Literal_value() != nil:
-		return operand{isVal: true, val: &Value{Kind: ValueLiteral, Text: base.Literal_value().GetText()}}
+		return operand{isVal: true, val: &Value{Kind: ValueLiteral, Literal: buildLiteral(base.Literal_value())}}
 	case base.BIND_PARAMETER() != nil:
-		return operand{isVal: true, val: &Value{Kind: ValueBind, Text: base.BIND_PARAMETER().GetText()}}
+		return operand{isVal: true, val: &Value{Kind: ValueBind, Bind: base.BIND_PARAMETER().GetText()}}
 	case base.Column_name_excluding_string() != nil:
 		return operand{isCol: true, col: unquoteIdent(base.Column_name_excluding_string().GetText())}
 	case base.Table_name() != nil && base.Column_name() != nil:
 		return operand{isCol: true, table: unquoteIdent(base.Table_name().GetText()), col: unquoteIdent(base.Column_name().GetText())}
 	}
 	return operand{}
+}
+
+// buildLiteral classifies a literal_value node and parses it into a typed Go
+// value (see Literal).
+func buildLiteral(lv gen.ILiteral_valueContext) *Literal {
+	raw := lv.GetText()
+	switch {
+	case lv.NULL_() != nil:
+		return &Literal{Kind: LiteralNull, Raw: raw}
+	case lv.TRUE_() != nil:
+		return &Literal{Kind: LiteralBool, Raw: raw, Value: true}
+	case lv.FALSE_() != nil:
+		return &Literal{Kind: LiteralBool, Raw: raw, Value: false}
+	case lv.STRING_LITERAL() != nil:
+		return &Literal{Kind: LiteralString, Raw: raw, Value: unquoteString(raw)}
+	case lv.BLOB_LITERAL() != nil:
+		return &Literal{Kind: LiteralBlob, Raw: raw, Value: decodeBlob(raw)}
+	case lv.NUMERIC_LITERAL() != nil:
+		kind, val := parseNumeric(raw)
+		return &Literal{Kind: kind, Raw: raw, Value: val}
+	default: // CURRENT_TIME / CURRENT_DATE / CURRENT_TIMESTAMP
+		return &Literal{Kind: LiteralKeyword, Raw: raw, Value: strings.ToUpper(raw)}
+	}
+}
+
+// parseNumeric parses a SQLite numeric literal into an int64 or float64.
+func parseNumeric(s string) (LiteralKind, any) {
+	if ls := strings.ToLower(s); strings.HasPrefix(ls, "0x") {
+		if n, err := strconv.ParseInt(ls[2:], 16, 64); err == nil {
+			return LiteralInteger, n
+		}
+		if u, err := strconv.ParseUint(ls[2:], 16, 64); err == nil {
+			return LiteralInteger, int64(u)
+		}
+	}
+	if !strings.ContainsAny(s, ".eE") {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return LiteralInteger, n
+		}
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return LiteralFloat, f
+	}
+	return LiteralFloat, nil
+}
+
+// unquoteString turns a SQL string literal ('it”s') into its Go value (it's).
+func unquoteString(s string) string {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return strings.ReplaceAll(s[1:len(s)-1], "''", "'")
+	}
+	return s
+}
+
+// decodeBlob decodes a SQL blob literal (X'4142') into raw bytes.
+func decodeBlob(s string) []byte {
+	if len(s) >= 3 && (s[0] == 'x' || s[0] == 'X') && s[1] == '\'' && s[len(s)-1] == '\'' {
+		if b, err := hex.DecodeString(s[2 : len(s)-1]); err == nil {
+			return b
+		}
+	}
+	return nil
 }
 
 // soleBase follows the single-child precedence chain (expr_or → expr_and → … →

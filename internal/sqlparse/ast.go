@@ -166,8 +166,57 @@ func (v ValueKind) String() string {
 	}
 }
 
-// Value is the right-hand side of a simple comparison predicate.
+// Value is the right-hand side of a simple comparison predicate: either a typed
+// literal or a bind parameter.
 type Value struct {
-	Kind ValueKind
-	Text string // literal text (e.g. 5, 'abc') or bind parameter (e.g. ?, :id)
+	Kind    ValueKind
+	Literal *Literal // set when Kind == ValueLiteral
+	Bind    string   // bind parameter token (e.g. ?, :id, @x, $y) when Kind == ValueBind
+}
+
+// LiteralKind classifies a SQL literal so consumers switch on its type rather
+// than reparsing text.
+type LiteralKind int
+
+const (
+	LiteralNull    LiteralKind = iota // NULL
+	LiteralInteger                    // integer (incl. hex 0x…)
+	LiteralFloat                      // floating point
+	LiteralString                     // 'text'
+	LiteralBool                       // TRUE / FALSE
+	LiteralBlob                       // X'4142'
+	LiteralKeyword                    // CURRENT_TIME / CURRENT_DATE / CURRENT_TIMESTAMP
+)
+
+func (l LiteralKind) String() string {
+	switch l {
+	case LiteralNull:
+		return "null"
+	case LiteralInteger:
+		return "integer"
+	case LiteralFloat:
+		return "float"
+	case LiteralString:
+		return "string"
+	case LiteralBool:
+		return "bool"
+	case LiteralBlob:
+		return "blob"
+	case LiteralKeyword:
+		return "keyword"
+	default:
+		return "unknown"
+	}
+}
+
+// Literal is a typed SQL literal value.
+type Literal struct {
+	Kind LiteralKind
+	Raw  string // original source text (e.g. 21, 'paid', X'4142', CURRENT_TIMESTAMP)
+	// Value is the parsed Go value matching Kind:
+	//   LiteralInteger -> int64    LiteralFloat   -> float64
+	//   LiteralString  -> string   LiteralBool    -> bool
+	//   LiteralBlob    -> []byte   LiteralNull    -> nil
+	//   LiteralKeyword -> string (the upper-cased keyword)
+	Value any
 }
