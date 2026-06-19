@@ -27,6 +27,11 @@ type Query struct {
 	// mapping each column to a specific table is future work. SELECT * yields
 	// no columns (the set of columns is not known syntactically).
 	Columns []string
+	// Stmt is the structured AST of the query, built for planning what to fetch
+	// per source and which filters/projections can be pushed down. Tables and
+	// Columns above are exhaustive flat views; Stmt models the query structure
+	// (see ast.go for what is and isn't yet represented).
+	Stmt *Select
 }
 
 // Parse lexes, parses, and validates a single read-only SELECT statement and
@@ -51,14 +56,15 @@ func Parse(raw string) (*Query, error) {
 		return nil, errs.errs[0]
 	}
 
-	if err := validateReadOnlySelect(tree); err != nil {
+	sel, err := validateReadOnlySelect(tree)
+	if err != nil {
 		return nil, err
 	}
 
 	c := newTableCollector()
 	antlr.NewParseTreeWalker().Walk(c, tree)
 
-	q := &Query{Raw: raw}
+	q := &Query{Raw: raw, Stmt: buildSelect(sel)}
 	if tables := c.external(); len(tables) > 0 {
 		sort.Strings(tables)
 		q.Tables = tables
@@ -71,30 +77,31 @@ func Parse(raw string) (*Query, error) {
 }
 
 // validateReadOnlySelect ensures the parse tree holds exactly one statement and
-// that it is a plain (non-EXPLAIN) SELECT, reporting where the offending
-// construct is when one exists.
-func validateReadOnlySelect(tree gen.IParseContext) error {
+// that it is a plain (non-EXPLAIN) SELECT, returning that select statement.
+// It reports where the offending construct is when one exists.
+func validateReadOnlySelect(tree gen.IParseContext) (gen.ISelect_stmtContext, error) {
 	list := tree.Sql_stmt_list()
 	if list == nil {
-		return &Error{Msg: "no SQL statement found"}
+		return nil, &Error{Msg: "no SQL statement found"}
 	}
 	stmts := list.AllSql_stmt()
 	switch len(stmts) {
 	case 0:
-		return &Error{Msg: "no SQL statement found"}
+		return nil, &Error{Msg: "no SQL statement found"}
 	case 1:
 		// ok
 	default:
 		// Point at the start of the second statement.
-		return tokenError(stmts[1].GetStart(), "only a single statement is supported, found %d", len(stmts))
+		return nil, tokenError(stmts[1].GetStart(), "only a single statement is supported, found %d", len(stmts))
 	}
 
 	st := stmts[0]
 	if ex := st.EXPLAIN_(); ex != nil {
-		return tokenError(ex.GetSymbol(), "EXPLAIN is not supported; only read-only SELECT statements are allowed")
+		return nil, tokenError(ex.GetSymbol(), "EXPLAIN is not supported; only read-only SELECT statements are allowed")
 	}
-	if st.Select_stmt() == nil {
-		return tokenError(st.GetStart(), "only read-only SELECT statements are supported")
+	sel := st.Select_stmt()
+	if sel == nil {
+		return nil, tokenError(st.GetStart(), "only read-only SELECT statements are supported")
 	}
-	return nil
+	return sel, nil
 }
