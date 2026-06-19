@@ -21,6 +21,83 @@ func planFor(t *testing.T, sql string) source.ScanRequest {
 	return planScan(q.Stmt, src, ts)
 }
 
+// planForJoin plans the scan for the source at fromIdx, giving it a table schema
+// with the named columns.
+func planForJoin(t *testing.T, sql string, fromIdx int, cols ...string) source.ScanRequest {
+	t.Helper()
+	q, err := sqlparse.Parse(sql)
+	require.NoError(t, err)
+	require.Greater(t, len(q.Stmt.From), fromIdx)
+	src := q.Stmt.From[fromIdx]
+	columns := make([]source.Column, len(cols))
+	for i, c := range cols {
+		columns[i] = source.Column{Name: c}
+	}
+	return planScan(q.Stmt, src, source.TableSchema{Name: src.Name, Columns: columns})
+}
+
+// The driving table of an FK/dimension-lookup join (every other source pinned to
+// constants via the join keys) gets LIMIT + ORDER pushed.
+func TestPlanScanPushesLimitForFKLookupJoin(t *testing.T) {
+	sql := `SELECT p.number FROM github.pulls p
+		JOIN github.repos r ON r.owner = p.owner AND r.name = p.repo
+		WHERE p.owner = 'golang' AND p.repo = 'go' AND p.state = 'open'
+		ORDER BY p.updated_at DESC LIMIT 3`
+
+	req := planForJoin(t, sql, 0, "owner", "repo", "state", "updated_at", "number")
+	assert.Equal(t, []source.OrderTerm{{Column: "updated_at", Desc: true}}, req.OrderBy)
+	require.NotNil(t, req.Limit)
+	assert.Equal(t, 3, *req.Limit)
+}
+
+// The non-driving (lookup) source of that same join must NOT get the LIMIT.
+func TestPlanScanLimitNotPushedToLookupSource(t *testing.T) {
+	sql := `SELECT p.number FROM github.pulls p
+		JOIN github.repos r ON r.owner = p.owner AND r.name = p.repo
+		WHERE p.owner = 'golang' AND p.repo = 'go' AND p.state = 'open'
+		ORDER BY p.updated_at DESC LIMIT 3`
+
+	req := planForJoin(t, sql, 1, "owner", "name") // repos
+	assert.Nil(t, req.Limit)
+}
+
+// A LEFT JOIN preserves the leftmost (driving) source's rows, so LIMIT is safe.
+func TestPlanScanPushesLimitForLeftJoin(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a LEFT JOIN s.b b ON a.x = b.y
+		WHERE a.k = 'v' ORDER BY a.t DESC LIMIT 3`
+
+	req := planForJoin(t, sql, 0, "t", "k", "x")
+	require.NotNil(t, req.Limit)
+	assert.Equal(t, 3, *req.Limit)
+}
+
+// An INNER join on an unpinned key can drop driving rows, so LIMIT must NOT push.
+func TestPlanScanNoLimitWhenJoinKeyUnpinned(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a JOIN s.b b ON a.x = b.y
+		WHERE a.k = 'v' ORDER BY a.t DESC LIMIT 3`
+
+	req := planForJoin(t, sql, 0, "t", "k", "x")
+	assert.Nil(t, req.Limit)
+}
+
+// ORDER BY spanning two sources can't be honored by one source, so no LIMIT push.
+func TestPlanScanNoLimitWhenOrderSpansSources(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a JOIN s.b b ON a.k = b.k
+		WHERE a.k = 'v' ORDER BY a.t, b.u LIMIT 3`
+
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Nil(t, req.Limit)
+}
+
+// RIGHT/FULL joins can drop or NULL-extend the driving source — never push LIMIT.
+func TestPlanScanNoLimitWithRightJoin(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a RIGHT JOIN s.b b ON a.k = b.k
+		WHERE a.k = 'v' ORDER BY a.t LIMIT 3`
+
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Nil(t, req.Limit)
+}
+
 func TestPlanScanFiltersAndOrder(t *testing.T) {
 	req := planFor(t, "SELECT * FROM github.issues WHERE owner='golang' AND state='open' AND comments > 5 ORDER BY updated_at DESC LIMIT 10")
 

@@ -38,10 +38,11 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 		req.OrderBy = append(req.OrderBy, source.OrderTerm{Column: o.Column, Desc: o.Desc})
 	}
 
-	// LIMIT/OFFSET only push for a single-source query; otherwise a join could
-	// drop rows after the source already truncated. The connector additionally
-	// refuses to push unless it consumed every filter and honored the order.
-	if single && stmt.Limit != nil {
+	// Push LIMIT/OFFSET when this source drives the result: a single-source query,
+	// or a join where src is the ordering source and the join cannot drop its rows
+	// (see limitSafeForJoin). The connector additionally refuses to push unless it
+	// consumed every filter and honored the order.
+	if stmt.Limit != nil && (single || limitSafeForJoin(stmt, src)) {
 		if n, ok := intValue(stmt.Limit.Count); ok {
 			req.Limit = &n
 		}
@@ -50,6 +51,114 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 		}
 	}
 	return req
+}
+
+// limitSafeForJoin reports whether LIMIT/OFFSET may be pushed to src in a
+// multi-source query. It is safe only when src alone determines the ordering AND
+// the join cannot drop src's rows — otherwise truncating src could omit rows the
+// full result would keep. Both accepted conditions are sound (they may, like all
+// of push-down, fetch a superset that SQLite then trims):
+//
+//   - pinned-lookup: every column of every other source referenced in a predicate
+//     is pinned to a constant (a literal, or transitively equi-joined to one), so
+//     the other tables are constant lookups — each matches all of src's rows (a
+//     1:1/1:N join that never drops a src row) or none (an empty result either
+//     way). This is the FK/dimension-lookup pattern.
+//   - left-preserving: src is the leftmost source and every join is LEFT or CROSS,
+//     so src's rows survive every join.
+func limitSafeForJoin(stmt *sqlparse.Select, src sqlparse.Source) bool {
+	// The ordering must be fully determined by src's columns (a multi-source or
+	// expression ORDER BY can't be honored by truncating src alone).
+	if len(stmt.OrderBy) == 0 {
+		return false
+	}
+	for _, o := range stmt.OrderBy {
+		if o.Column == "" || !attributable(o.Table, src, false) {
+			return false
+		}
+	}
+	// RIGHT/FULL joins can drop src rows or introduce NULL-extended rows.
+	for i := range stmt.Joins {
+		switch stmt.Joins[i].Type {
+		case sqlparse.JoinRight, sqlparse.JoinFull:
+			return false
+		}
+	}
+	return allOtherColumnsPinned(stmt, src) || leftPreserving(stmt, src)
+}
+
+// allOtherColumnsPinned reports whether every non-src column appearing in any
+// predicate is pinned to a constant. Unqualified columns and unstructured
+// predicates can't be analyzed, so their presence makes this false.
+func allOtherColumnsPinned(stmt *sqlparse.Select, src sqlparse.Source) bool {
+	pinned := pinnedColumns(stmt)
+	isSrc := func(table string) bool { return table == src.Alias || table == src.Name }
+	ok := func(table, column string) bool {
+		return isSrc(table) || pinned[colRef{table, column}]
+	}
+	for _, p := range allPredicates(stmt) {
+		switch {
+		case p.Op == sqlparse.OpNone: // unstructured/raw conjunct — can't analyze
+			return false
+		case p.Table == "": // unqualified — ambiguous in a multi-source query
+			return false
+		case !ok(p.Table, p.Column):
+			return false
+		case p.RefColumn != "" && (p.RefTable == "" || !ok(p.RefTable, p.RefColumn)):
+			return false
+		}
+	}
+	return true
+}
+
+// pinnedColumns returns the columns constrained to a constant: those with a
+// literal equality, plus the transitive closure over equi-join keys.
+func pinnedColumns(stmt *sqlparse.Select) map[colRef]bool {
+	pinned := map[colRef]bool{}
+	for ref := range literalEqualities(stmt) {
+		pinned[ref] = true
+	}
+	pairs := equiJoinPairs(stmt)
+	for changed := true; changed; {
+		changed = false
+		for _, p := range pairs {
+			a, b := p[0], p[1]
+			if pinned[a] != pinned[b] {
+				pinned[a], pinned[b] = true, true
+				changed = true
+			}
+		}
+	}
+	return pinned
+}
+
+// leftPreserving reports whether src is the leftmost source and every join keeps
+// its rows (LEFT or CROSS).
+func leftPreserving(stmt *sqlparse.Select, src sqlparse.Source) bool {
+	if len(stmt.From) == 0 {
+		return false
+	}
+	first := stmt.From[0]
+	if first.Schema != src.Schema || first.Name != src.Name || first.Alias != src.Alias {
+		return false
+	}
+	for i := range stmt.Joins {
+		switch stmt.Joins[i].Type {
+		case sqlparse.JoinLeft, sqlparse.JoinCross:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// allPredicates returns every WHERE conjunct and JOIN ON predicate.
+func allPredicates(stmt *sqlparse.Select) []sqlparse.Predicate {
+	out := append([]sqlparse.Predicate(nil), stmt.Where...)
+	for i := range stmt.Joins {
+		out = append(out, stmt.Joins[i].On...)
+	}
+	return out
 }
 
 // colRef identifies a qualified column (qualifier.column).
