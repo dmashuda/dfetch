@@ -241,6 +241,59 @@ func TestASTValuesHasNoSources(t *testing.T) {
 	assert.Empty(t, s.Projections)
 }
 
+func TestLiteralAccessors(t *testing.T) {
+	t.Run("matching accessors return the typed value", func(t *testing.T) {
+		i := firstValue(t, "SELECT * FROM t WHERE a = 42").Literal
+		got, ok := i.AsInt()
+		require.True(t, ok)
+		assert.Equal(t, int64(42), got)
+
+		f := firstValue(t, "SELECT * FROM t WHERE a = 3.5").Literal
+		gotF, ok := f.AsFloat()
+		require.True(t, ok)
+		assert.Equal(t, 3.5, gotF)
+
+		s := firstValue(t, "SELECT * FROM t WHERE a = 'hi'").Literal
+		gotS, ok := s.AsString()
+		require.True(t, ok)
+		assert.Equal(t, "hi", gotS)
+
+		b := firstValue(t, "SELECT * FROM t WHERE a = TRUE").Literal
+		gotB, ok := b.AsBool()
+		require.True(t, ok)
+		assert.True(t, gotB)
+
+		bl := firstValue(t, "SELECT * FROM t WHERE a = X'4142'").Literal
+		gotBlob, ok := bl.AsBlob()
+		require.True(t, ok)
+		assert.Equal(t, []byte("AB"), gotBlob)
+
+		kw := firstValue(t, "SELECT * FROM t WHERE a = CURRENT_DATE").Literal
+		gotKw, ok := kw.AsKeyword()
+		require.True(t, ok)
+		assert.Equal(t, "CURRENT_DATE", gotKw)
+
+		null := firstValue(t, "SELECT * FROM t WHERE a = NULL").Literal
+		assert.True(t, null.IsNull())
+	})
+
+	t.Run("mismatched accessors report false", func(t *testing.T) {
+		i := firstValue(t, "SELECT * FROM t WHERE a = 42").Literal
+		_, ok := i.AsString()
+		assert.False(t, ok)
+		_, ok = i.AsFloat()
+		assert.False(t, ok)
+		assert.False(t, i.IsNull())
+	})
+
+	t.Run("nil literal is safe", func(t *testing.T) {
+		var l *Literal
+		_, ok := l.AsInt()
+		assert.False(t, ok)
+		assert.False(t, l.IsNull())
+	})
+}
+
 func TestEnumStrings(t *testing.T) {
 	assert.Equal(t, "=", OpEq.String())
 	assert.Equal(t, "IS NOT NULL", OpIsNotNull.String())

@@ -200,7 +200,7 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 		// x IS NULL / x IS NOT NULL (the `IS NULL` form; the bare ISNULL/NOTNULL
 		// keywords are handled in the single-operand branch above).
 		if len(bin.AllIS_()) > 0 {
-			if r := classify(comps[1]); r.isVal && r.val.Literal != nil && r.val.Literal.Kind == LiteralNull {
+			if r := classify(comps[1]); r.isVal && r.val.Literal.IsNull() {
 				op := OpIsNull
 				if len(bin.AllNOT_()) > 0 {
 					op = OpIsNotNull

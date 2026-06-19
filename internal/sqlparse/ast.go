@@ -218,5 +218,62 @@ type Literal struct {
 	//   LiteralString  -> string   LiteralBool    -> bool
 	//   LiteralBlob    -> []byte   LiteralNull    -> nil
 	//   LiteralKeyword -> string (the upper-cased keyword)
+	//
+	// Prefer the typed accessors (AsInt, AsString, …) over asserting Value.
 	Value any
+}
+
+// IsNull reports whether the literal is SQL NULL.
+func (l *Literal) IsNull() bool { return l != nil && l.Kind == LiteralNull }
+
+// AsInt returns the value when the literal is an integer.
+func (l *Literal) AsInt() (int64, bool) {
+	v, ok := literalValue[int64](l)
+	return v, ok
+}
+
+// AsFloat returns the value when the literal is a float.
+func (l *Literal) AsFloat() (float64, bool) {
+	v, ok := literalValue[float64](l)
+	return v, ok
+}
+
+// AsString returns the value when the literal is a string.
+func (l *Literal) AsString() (string, bool) {
+	if l == nil || l.Kind != LiteralString {
+		return "", false
+	}
+	v, ok := l.Value.(string)
+	return v, ok
+}
+
+// AsBool returns the value when the literal is a boolean.
+func (l *Literal) AsBool() (bool, bool) {
+	v, ok := literalValue[bool](l)
+	return v, ok
+}
+
+// AsBlob returns the bytes when the literal is a blob.
+func (l *Literal) AsBlob() ([]byte, bool) {
+	v, ok := literalValue[[]byte](l)
+	return v, ok
+}
+
+// AsKeyword returns the keyword when the literal is one of CURRENT_TIME,
+// CURRENT_DATE, or CURRENT_TIMESTAMP.
+func (l *Literal) AsKeyword() (string, bool) {
+	if l == nil || l.Kind != LiteralKeyword {
+		return "", false
+	}
+	v, ok := l.Value.(string)
+	return v, ok
+}
+
+func literalValue[T any](l *Literal) (T, bool) {
+	var zero T
+	if l == nil {
+		return zero, false
+	}
+	v, ok := l.Value.(T)
+	return v, ok
 }
