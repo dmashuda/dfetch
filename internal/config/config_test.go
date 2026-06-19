@@ -22,23 +22,22 @@ func TestLoadParsesSources(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	content := `
 sources:
-  - table: users
-    type: csv
+  - name: github
+    type: github
     params:
-      path: ./users.csv
-  - table: orders
-    type: http
-    params:
-      url: https://example.com/orders.json
+      base_url: https://github.example.com/api/v3
+  - name: gh2
+    type: github
+    params: {}
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	require.Len(t, cfg.Sources, 2)
-	assert.Equal(t, "users", cfg.Sources[0].Table)
-	assert.Equal(t, "csv", cfg.Sources[0].Type)
-	assert.Equal(t, "./users.csv", cfg.Sources[0].Params["path"])
+	assert.Equal(t, "github", cfg.Sources[0].Name)
+	assert.Equal(t, "github", cfg.Sources[0].Type)
+	assert.Equal(t, "https://github.example.com/api/v3", cfg.Sources[0].Params["base_url"])
 }
 
 func TestLoadMissingExplicitPathErrors(t *testing.T) {

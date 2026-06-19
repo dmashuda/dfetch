@@ -183,11 +183,12 @@ func orderParam(terms []source.OrderTerm, allowed map[string]string) (sort, dire
 	return s, direction, true
 }
 
-// pageLimit decides per_page and whether LIMIT can be pushed: pushing LIMIT is
-// only safe when the API returns rows in the query's order, i.e. there is no
-// ORDER BY or it was mapped to a sort param.
-func pageLimit(req source.ScanRequest, sortMapped bool) (perPage int, pushLimit bool) {
-	pushLimit = req.Limit != nil && (len(req.OrderBy) == 0 || sortMapped)
+// pageLimit decides per_page and whether LIMIT can be pushed. Pushing LIMIT is
+// only safe when the API returns exactly the rows the query would keep — i.e.
+// every filter was consumed by the endpoint AND the ordering was honored (or
+// there is no ORDER BY). The caller passes that determination as safe.
+func pageLimit(req source.ScanRequest, safe bool) (perPage int, pushLimit bool) {
+	pushLimit = req.Limit != nil && safe
 	perPage = 100
 	if pushLimit && *req.Limit < perPage {
 		perPage = *req.Limit
@@ -196,6 +197,28 @@ func pageLimit(req source.ScanRequest, sortMapped bool) (perPage int, pushLimit 
 		perPage = 1
 	}
 	return perPage, pushLimit
+}
+
+// consumedAll reports whether every filter in the request is an equality on one
+// of the allowed columns (i.e. the endpoint can honor all of them). If not, the
+// API result is not the full filtered set and LIMIT must not be pushed.
+func consumedAll(req source.ScanRequest, allowed ...string) bool {
+	set := make(map[string]bool, len(allowed))
+	for _, a := range allowed {
+		set[a] = true
+	}
+	for _, f := range req.Filters {
+		if f.Op != sqlparse.OpEq || !set[f.Column] {
+			return false
+		}
+	}
+	return true
+}
+
+// limitSafe combines the ordering and filter conditions under which LIMIT may be
+// pushed.
+func limitSafe(req source.ScanRequest, sortMapped bool, allowed ...string) bool {
+	return (len(req.OrderBy) == 0 || sortMapped) && consumedAll(req, allowed...)
 }
 
 func escapePath(s string) string { return url.PathEscape(s) }

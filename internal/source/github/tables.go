@@ -138,7 +138,7 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*so
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, sortOK)
+	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/issues?" + q.Encode()
@@ -191,7 +191,7 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*sou
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, sortOK)
+	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/pulls?" + q.Encode()
@@ -248,7 +248,7 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, sortOK)
+	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "name", "repo"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/users/" + escapePath(owner) + "/repos?" + q.Encode()
