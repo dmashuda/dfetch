@@ -1,0 +1,43 @@
+version: 2
+
+# dfetch links against mattn/go-sqlite3, which requires cgo. cgo cannot be
+# cleanly cross-compiled to macOS/Windows from a single Linux runner, so the
+# release workflow (.github/workflows/release.yaml) builds each OS natively on
+# its own runner using `goreleaser build --single-target`, then a final job
+# packages and publishes the collected binaries.
+#
+# The archives/checksum/changelog sections below are kept for when we move to a
+# full single-runner build (e.g. via zig cc) or goreleaser Pro split/merge.
+
+builds:
+  - id: dfetch
+    main: .
+    binary: dfetch
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: dfetch
+    formats: ["tar.gz"]
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
