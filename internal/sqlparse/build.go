@@ -11,13 +11,22 @@ import (
 
 // buildSelect translates a parsed select_stmt into dfetch's typed AST. Only the
 // first select_core is modeled; compound tails (UNION/…), WITH bodies, and the
-// trailing ORDER BY/LIMIT are not yet represented (see ast.go).
+// trailing ORDER BY/LIMIT are not yet represented (see ast.go). Select.Complete
+// records whether any such clause was dropped.
 func buildSelect(stmt gen.ISelect_stmtContext) *Select {
 	cores := stmt.AllSelect_core()
 	if len(cores) == 0 {
 		return &Select{}
 	}
-	return buildCore(cores[0])
+	s := buildCore(cores[0])
+	// The query is fully represented only if the core modeled everything it saw
+	// and the statement has no WITH, compound tail, ORDER BY, or LIMIT.
+	s.Complete = s.Complete &&
+		stmt.With_clause() == nil &&
+		len(cores) == 1 &&
+		stmt.Order_clause() == nil &&
+		stmt.Limit_clause() == nil
+	return s
 }
 
 func buildCore(core gen.ISelect_coreContext) *Select {
@@ -31,6 +40,16 @@ func buildCore(core gen.ISelect_coreContext) *Select {
 	}
 	if w := core.GetWhere_expr(); w != nil {
 		s.Where = buildPredicates(w)
+	}
+	// GROUP BY / HAVING / WINDOW are not modeled; their presence makes the AST
+	// an incomplete representation of the query. An incomplete subquery source
+	// also makes this select incomplete, since rendering it would drop the
+	// subquery's unmodeled clauses.
+	s.Complete = core.GROUP_() == nil && core.HAVING_() == nil && core.WINDOW_() == nil
+	for _, src := range s.From {
+		if src.Subquery != nil && !src.Subquery.Complete {
+			s.Complete = false
+		}
 	}
 	return s
 }
@@ -353,9 +372,28 @@ func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
 	case l.isCol && r.isVal:
 		return Predicate{Table: l.table, Column: l.col, Op: op, Value: r.val, Raw: raw}
 	case l.isVal && r.isCol:
+		// The column is on the right: structuring it requires putting the column
+		// first, which is only valid for operators whose operands commute (after
+		// mirroring relational ones). Non-commutative pattern operators
+		// (LIKE/GLOB/REGEXP/MATCH) would be inverted, so keep them as raw text.
+		if !commutable(op) {
+			return Predicate{Raw: raw}
+		}
 		return Predicate{Table: r.table, Column: r.col, Op: flipOp(op), Value: l.val, Raw: raw}
 	default:
 		return Predicate{Raw: raw}
+	}
+}
+
+// commutable reports whether an operator can be rewritten with its operands
+// swapped (relational ops via flipOp, equality/identity ops unchanged). Pattern
+// operators are not commutative and must not be flipped.
+func commutable(op Operator) bool {
+	switch op {
+	case OpLike, OpNotLike, OpGlob, OpNotGlob, OpRegexp, OpNotRegexp, OpMatch, OpNotMatch:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -369,7 +407,7 @@ func flipOp(op Operator) Operator {
 		return OpLt
 	case OpGte:
 		return OpLte
-	default: // =, <>, LIKE are unchanged (LIKE reversed is unusual but harmless)
+	default: // symmetric ops (=, <>, IS, IS [NOT] DISTINCT FROM) are unchanged
 		return op
 	}
 }

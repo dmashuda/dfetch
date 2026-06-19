@@ -15,6 +15,12 @@ package sqlparse
 
 // Select is the structured form of a single SELECT query.
 type Select struct {
+	// Complete reports whether the AST fully represents the source query. It is
+	// false when the parser dropped clauses the AST does not model (ORDER BY,
+	// LIMIT, GROUP BY/HAVING, WINDOW, WITH/CTE, or a compound UNION/EXCEPT tail),
+	// meaning SQL() reconstructs only part of the query and must not be treated
+	// as an equivalent rewrite. The zero value (false) is the safe default.
+	Complete    bool
 	Distinct    bool
 	Projections []Projection
 	// From holds the FROM/JOIN sources in order. From[0] is the first source;

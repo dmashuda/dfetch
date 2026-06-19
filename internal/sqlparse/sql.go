@@ -13,13 +13,47 @@ import (
 
 var bareIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// quoteIdent double-quotes an identifier unless it is a plain bareword. Note: a
-// bareword that happens to be a SQL keyword is not quoted (a known limitation).
+// quoteIdent double-quotes an identifier unless it is a plain bareword that is
+// not a SQL keyword. Keywords must be quoted or the rendered SQL fails to parse
+// (e.g. a column named "order").
 func quoteIdent(name string) string {
 	if bareIdent.MatchString(name) {
-		return name
+		if _, isKeyword := sqlKeywords[strings.ToUpper(name)]; !isKeyword {
+			return name
+		}
 	}
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// sqlKeywords is the set of SQLite keyword tokens (from grammar/SQLiteLexer.g4).
+// An identifier matching one of these must be quoted when rendered.
+var sqlKeywords = map[string]struct{}{
+	"ABORT": {}, "ACTION": {}, "ADD": {}, "AFTER": {}, "ALL": {}, "ALTER": {},
+	"ALWAYS": {}, "ANALYZE": {}, "AND": {}, "AS": {}, "ASC": {}, "ATTACH": {},
+	"AUTOINCREMENT": {}, "BEFORE": {}, "BEGIN": {}, "BETWEEN": {}, "BY": {}, "CASCADE": {},
+	"CASE": {}, "CAST": {}, "CHECK": {}, "COLLATE": {}, "COLUMN": {}, "COMMIT": {},
+	"CONFLICT": {}, "CONSTRAINT": {}, "CREATE": {}, "CROSS": {}, "CURRENT": {}, "CURRENT_DATE": {},
+	"CURRENT_TIME": {}, "CURRENT_TIMESTAMP": {}, "DATABASE": {}, "DEFAULT": {}, "DEFERRABLE": {}, "DEFERRED": {},
+	"DELETE": {}, "DESC": {}, "DETACH": {}, "DISTINCT": {}, "DO": {}, "DROP": {},
+	"EACH": {}, "ELSE": {}, "END": {}, "ESCAPE": {}, "EXCEPT": {}, "EXCLUDE": {},
+	"EXCLUSIVE": {}, "EXISTS": {}, "EXPLAIN": {}, "FAIL": {}, "FALSE": {}, "FILTER": {},
+	"FIRST": {}, "FOLLOWING": {}, "FOR": {}, "FOREIGN": {}, "FROM": {}, "FULL": {},
+	"GENERATED": {}, "GLOB": {}, "GROUP": {}, "GROUPS": {}, "HAVING": {}, "IF": {},
+	"IGNORE": {}, "IMMEDIATE": {}, "IN": {}, "INDEX": {}, "INDEXED": {}, "INITIALLY": {},
+	"INNER": {}, "INSERT": {}, "INSTEAD": {}, "INTERSECT": {}, "INTO": {}, "IS": {},
+	"ISNULL": {}, "JOIN": {}, "KEY": {}, "LAST": {}, "LEFT": {}, "LIKE": {},
+	"LIMIT": {}, "MATCH": {}, "MATERIALIZED": {}, "NATURAL": {}, "NO": {}, "NOT": {},
+	"NOTHING": {}, "NOTNULL": {}, "NULL": {}, "NULLS": {}, "OF": {}, "OFFSET": {},
+	"ON": {}, "OR": {}, "ORDER": {}, "OTHERS": {}, "OUTER": {}, "OVER": {},
+	"PARTITION": {}, "PLAN": {}, "PRAGMA": {}, "PRECEDING": {}, "PRIMARY": {}, "QUERY": {},
+	"RAISE": {}, "RANGE": {}, "RECURSIVE": {}, "REFERENCES": {}, "REGEXP": {}, "REINDEX": {},
+	"RELEASE": {}, "RENAME": {}, "REPLACE": {}, "RESTRICT": {}, "RETURNING": {}, "RIGHT": {},
+	"ROLLBACK": {}, "ROW": {}, "ROWID": {}, "ROWS": {}, "SAVEPOINT": {}, "SELECT": {},
+	"SET": {}, "STORED": {}, "STRICT": {}, "TABLE": {}, "TEMP": {}, "TEMPORARY": {},
+	"THEN": {}, "TIES": {}, "TO": {}, "TRANSACTION": {}, "TRIGGER": {}, "TRUE": {},
+	"UNBOUNDED": {}, "UNION": {}, "UNIQUE": {}, "UPDATE": {}, "USING": {}, "VACUUM": {},
+	"VALUES": {}, "VIEW": {}, "VIRTUAL": {}, "WHEN": {}, "WHERE": {}, "WINDOW": {},
+	"WITH": {}, "WITHIN": {}, "WITHOUT": {},
 }
 
 // SQL renders the query back into a SQL string.
@@ -30,7 +64,9 @@ func (q *Query) SQL() string {
 	return q.Stmt.SQL()
 }
 
-// SQL renders the Select back into a SQL string.
+// SQL renders the Select back into a SQL string. It reproduces only the modeled
+// clauses; when Complete is false the result omits clauses that were present in
+// the source query (see Select.Complete) and must not be treated as equivalent.
 func (s *Select) SQL() string {
 	var b strings.Builder
 	b.WriteString("SELECT ")
