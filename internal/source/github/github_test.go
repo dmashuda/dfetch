@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -27,6 +28,32 @@ func eqFilter(col, val string) source.Filter {
 	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
 }
 
+// collectScan runs Scan and accumulates every emitted chunk into one Rows, so
+// tests can assert on the full result. Columns come from the first chunk (the
+// connector repeats them per page).
+func collectScan(c source.Connector, req source.ScanRequest) (*source.Rows, error) {
+	rows := &source.Rows{}
+	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
+		if rows.Columns == nil {
+			rows.Columns = chunk.Columns
+		}
+		rows.Rows = append(rows.Rows, chunk.Rows...)
+		return nil
+	})
+	return rows, err
+}
+
+// scanChunkSizes runs Scan and records the row count of each emitted chunk, so
+// streaming tests can assert one chunk per page.
+func scanChunkSizes(c source.Connector, req source.ScanRequest) ([]int, error) {
+	var sizes []int
+	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
+		sizes = append(sizes, len(chunk.Rows))
+		return nil
+	})
+	return sizes, err
+}
+
 // tenIssues is a one-page response of 10 plain issues numbered 1..10.
 const tenIssues = `[
 	{"number":1,"state":"open"},{"number":2,"state":"open"},{"number":3,"state":"open"},
@@ -45,7 +72,7 @@ func TestScanIssuesLimitWithOffsetFetchesEnough(t *testing.T) {
 	})
 
 	limit, offset := 2, 3
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
 		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
@@ -68,7 +95,7 @@ func TestScanIssuesMultiTermOrderDoesNotPushLimit(t *testing.T) {
 	})
 
 	limit := 2
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
 		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}, {Column: "number"}},
@@ -86,7 +113,7 @@ func TestScanReposPreservesOwnerCasing(t *testing.T) {
 		_, _ = w.Write([]byte(`{"name":"go","full_name":"golang/go","owner":{"login":"golang"}}`))
 	})
 
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "repos",
 		Filters: []source.Filter{eqFilter("owner", "Golang"), eqFilter("name", "go")},
 	})
@@ -126,7 +153,7 @@ func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
 		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
 		Limit:   intPtr(10),
 	}
-	rows, err := c.Scan(context.Background(), req)
+	rows, err := collectScan(c, req)
 	require.NoError(t, err)
 
 	// Pushdown reflected in the outbound request.
@@ -153,7 +180,7 @@ func TestScanIssuesRequiresOwnerRepo(t *testing.T) {
 		t.Error("should not call the API without owner/repo")
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	_, err := c.Scan(context.Background(), source.ScanRequest{
+	_, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "golang")}, // missing repo
 	})
@@ -171,7 +198,7 @@ func TestScanIssuesPagination(t *testing.T) {
 		_, _ = w.Write([]byte(`[{"number":1,"title":"one","state":"open"}]`))
 	})
 	// No LIMIT → both pages collected.
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
 	})
@@ -181,6 +208,53 @@ func TestScanIssuesPagination(t *testing.T) {
 	assert.Equal(t, int64(2), rows.Rows[1][2])
 }
 
+// Each API page is emitted as its own chunk (streamed), not buffered into one.
+func TestScanIssuesStreamsOneChunkPerPage(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`[{"number":3,"state":"open"},{"number":4,"state":"open"}]`))
+			return
+		}
+		w.Header().Set("Link", `<`+"http://"+r.Host+r.URL.Path+`?page=2>; rel="next"`)
+		_, _ = w.Write([]byte(`[{"number":1,"state":"open"},{"number":2,"state":"open"}]`))
+	})
+
+	sizes, err := scanChunkSizes(c, source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{2, 2}, sizes) // one chunk per page
+}
+
+// A pushed LIMIT stops paging at the cumulative count across pages — even when
+// the API returns fewer rows per page than per_page — trimming the final chunk.
+func TestScanIssuesLimitStopsAcrossPages(t *testing.T) {
+	calls := 0
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		page := r.URL.Query().Get("page")
+		if page == "" {
+			page = "1"
+		}
+		n, _ := strconv.Atoi(page)
+		// Always advertise a next page, so only the LIMIT can stop us.
+		w.Header().Set("Link", `<`+"http://"+r.Host+r.URL.Path+`?page=`+strconv.Itoa(n+1)+`>; rel="next"`)
+		_, _ = w.Write([]byte(`[{"number":1,"state":"open"},{"number":2,"state":"open"}]`))
+	})
+
+	limit := 3
+	sizes, err := scanChunkSizes(c, source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{2, 1}, sizes) // page 2 trimmed to hit LIMIT 3 total
+	assert.Equal(t, 2, calls)           // stopped — did not fetch page 3
+}
+
 func TestLimitNotPushedWhenOrderUnmapped(t *testing.T) {
 	var gotQuery string
 	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +262,7 @@ func TestLimitNotPushedWhenOrderUnmapped(t *testing.T) {
 		_, _ = w.Write([]byte(`[{"number":1,"title":"one","state":"open"}]`))
 	})
 	// ORDER BY on a non-sortable column → sort not mapped → per_page must NOT be the limit.
-	_, err := c.Scan(context.Background(), source.ScanRequest{
+	_, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
 		OrderBy: []source.OrderTerm{{Column: "title", Desc: true}},
@@ -206,7 +280,7 @@ func TestScanReposSingle(t *testing.T) {
 			"stargazers_count":120000,"forks_count":17000,"open_issues_count":9000,
 			"private":false,"owner":{"login":"golang"}}`))
 	})
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "repos",
 		Filters: []source.Filter{eqFilter("owner", "golang"), eqFilter("name", "go")},
 	})
@@ -222,7 +296,7 @@ func TestScanPulls(t *testing.T) {
 		assert.Equal(t, "/repos/o/r/pulls", r.URL.Path)
 		_, _ = w.Write([]byte(`[{"number":7,"title":"pr","state":"open","draft":true,"merged_at":null}]`))
 	})
-	rows, err := c.Scan(context.Background(), source.ScanRequest{
+	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "pulls",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
 	})
@@ -238,7 +312,7 @@ func TestAPIError(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 	})
-	_, err := c.Scan(context.Background(), source.ScanRequest{
+	_, err := collectScan(c, source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "missing")},
 	})
@@ -248,7 +322,7 @@ func TestAPIError(t *testing.T) {
 
 func TestUnknownTable(t *testing.T) {
 	c, _ := New(nil)
-	_, err := c.Scan(context.Background(), source.ScanRequest{Table: "nope"})
+	_, err := collectScan(c, source.ScanRequest{Table: "nope"})
 	assert.Error(t, err)
 }
 

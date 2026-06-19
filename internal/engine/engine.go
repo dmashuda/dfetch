@@ -7,6 +7,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/dmashuda/dfetch/internal/config"
 	"github.com/dmashuda/dfetch/internal/localdb"
@@ -87,22 +88,24 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 	}
 	defer func() { _ = db.Close() }()
 
-	// Fetch every source's rows concurrently (network-bound), then load them
-	// serially onto the local database's single connection.
-	loaded, err := e.fetchSources(ctx, q.Stmt, collectSources(q.Stmt))
+	// Resolve every source and create its table up front, serially: Attach and
+	// the attached-schema map are not goroutine-safe.
+	resolved, err := e.resolveSources(collectSources(q.Stmt))
 	if err != nil {
 		return nil, recordErr(span, err)
 	}
-	for _, ld := range loaded {
-		if err := db.Attach(ctx, ld.src.Schema); err != nil {
+	for _, r := range resolved {
+		if err := db.Attach(ctx, r.src.Schema); err != nil {
 			return nil, recordErr(span, err)
 		}
-		if err := db.CreateTable(ctx, ld.src.Schema, ld.ts); err != nil {
+		if err := db.CreateTable(ctx, r.src.Schema, r.ts); err != nil {
 			return nil, recordErr(span, err)
 		}
-		if err := db.Insert(ctx, ld.src.Schema, ld.src.Name, ld.rows.Columns, ld.rows.Rows); err != nil {
-			return nil, recordErr(span, err)
-		}
+	}
+
+	// Stream each source's pages concurrently, loading every chunk as it arrives.
+	if err := e.streamSources(ctx, db, q.Stmt, resolved); err != nil {
+		return nil, recordErr(span, err)
 	}
 
 	res, err := db.Query(ctx, q.Raw)
@@ -123,46 +126,59 @@ func recordErr(span trace.Span, err error) error {
 // many tables doesn't open an unbounded number of API connections.
 const maxConcurrentFetches = 8
 
-// loadedSource is a fetched source ready to be loaded into the local database.
-type loadedSource struct {
+// resolvedSource is a source matched to its connector and table schema, ready to
+// be created and streamed into the local database.
+type resolvedSource struct {
 	src  sqlparse.Source
+	conn source.Connector
 	ts   source.TableSchema
-	rows *source.Rows
 }
 
-// fetchSources scans every source concurrently and returns the results in the
-// original order. The first error cancels the remaining scans.
-func (e *Engine) fetchSources(ctx context.Context, stmt *sqlparse.Select, sources []sqlparse.Source) ([]loadedSource, error) {
-	out := make([]loadedSource, len(sources))
+// resolveSources maps every source to its connector and table schema, in order.
+func (e *Engine) resolveSources(sources []sqlparse.Source) ([]resolvedSource, error) {
+	out := make([]resolvedSource, len(sources))
+	for i, src := range sources {
+		conn, ts, err := e.resolveSource(src)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = resolvedSource{src: src, conn: conn, ts: ts}
+	}
+	return out, nil
+}
+
+// streamSources scans every source concurrently and loads each emitted chunk
+// into the local database as it arrives. Chunk inserts are serialized with mu
+// because localdb runs on a single pinned connection. The first error cancels the
+// remaining scans.
+func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, resolved []resolvedSource) error {
+	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrentFetches)
 
-	for i, src := range sources {
-		i, src := i, src
+	for _, r := range resolved {
+		r := r
 		g.Go(func() error {
-			conn, ts, err := e.resolveSource(src)
-			if err != nil {
-				return err
-			}
-			// Wrap the connector call so its HTTP client spans nest under it.
+			// Wrap the connector call so its HTTP and insert spans nest under it.
 			scanCtx, scanSpan := telemetry.Tracer().Start(gctx, "connector.scan",
 				trace.WithAttributes(
-					attribute.String("db.namespace", src.Schema),
-					attribute.String("db.collection.name", src.Name),
+					attribute.String("db.namespace", r.src.Schema),
+					attribute.String("db.collection.name", r.src.Name),
 				))
-			rows, err := conn.Scan(scanCtx, planScan(stmt, src, ts))
-			scanSpan.End()
+			defer scanSpan.End()
+
+			err := r.conn.Scan(scanCtx, planScan(stmt, r.src, r.ts), func(chunk *source.Rows) error {
+				mu.Lock()
+				defer mu.Unlock()
+				return db.Insert(scanCtx, r.src.Schema, r.src.Name, chunk.Columns, chunk.Rows)
+			})
 			if err != nil {
-				return fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err)
+				return fmt.Errorf("scanning %s.%s: %w", r.src.Schema, r.src.Name, err)
 			}
-			out[i] = loadedSource{src: src, ts: ts, rows: rows}
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return g.Wait()
 }
 
 // resolveSource maps a schema-qualified source to its connector and table schema.

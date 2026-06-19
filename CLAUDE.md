@@ -28,8 +28,10 @@ A connector is registered under a SQL schema (e.g. `github`) and exposes tables
 push-down `source.ScanRequest` (filters/ORDER BY/LIMIT) and `Scan` the connector
 → `ATTACH ':memory:' AS <schema>`, create the table, load the rows → run the
 original SQL **verbatim** against SQLite (the source of truth; connectors may
-return a superset). Sources are fetched concurrently (`errgroup`) then loaded
-serially onto localdb's single pinned connection. LIMIT is pushed to a source
+return a superset). `Scan` streams rows via an `emit` callback (one chunk per API
+page); the engine creates all tables up front, then fetches sources concurrently
+(`errgroup`) and loads each chunk **as it arrives**, serializing the writes with a
+mutex onto localdb's single pinned connection. LIMIT is pushed to a source
 when it's single-source, or when it's the driving source of a join the LIMIT can
 safely ride (ordering entirely on it, and the join can't drop its rows — every
 other source pinned to constants, or a leftmost source with only LEFT/CROSS

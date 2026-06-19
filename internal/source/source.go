@@ -89,8 +89,11 @@ type Rows struct {
 type Connector interface {
 	// Tables returns the schemas of every table this connector serves.
 	Tables() []TableSchema
-	// Scan fetches rows for one table, pushing down what it can from req.
-	Scan(ctx context.Context, req ScanRequest) (*Rows, error)
+	// Scan fetches rows for one table, pushing down what it can from req. It
+	// calls emit once per chunk (e.g. per API page) so the engine can load each
+	// chunk as it arrives instead of buffering the whole result; emit returns an
+	// error to abort the scan early, which Scan should propagate.
+	Scan(ctx context.Context, req ScanRequest, emit func(*Rows) error) error
 }
 
 // Factory builds a Connector from its config params.
