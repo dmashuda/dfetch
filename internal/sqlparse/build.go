@@ -10,23 +10,74 @@ import (
 )
 
 // buildSelect translates a parsed select_stmt into dfetch's typed AST. Only the
-// first select_core is modeled; compound tails (UNION/…), WITH bodies, and the
-// trailing ORDER BY/LIMIT are not yet represented (see ast.go). Select.Complete
-// records whether any such clause was dropped.
+// first select_core is modeled; compound tails (UNION/…) and WITH bodies are not
+// represented (see ast.go). ORDER BY and LIMIT are modeled. Select.Complete
+// records whether any unmodeled clause was dropped.
 func buildSelect(stmt gen.ISelect_stmtContext) *Select {
 	cores := stmt.AllSelect_core()
 	if len(cores) == 0 {
 		return &Select{}
 	}
 	s := buildCore(cores[0])
+	if oc := stmt.Order_clause(); oc != nil {
+		s.OrderBy = buildOrderBy(oc)
+	}
+	if lc := stmt.Limit_clause(); lc != nil {
+		s.Limit = buildLimit(lc)
+	}
 	// The query is fully represented only if the core modeled everything it saw
-	// and the statement has no WITH, compound tail, ORDER BY, or LIMIT.
+	// and the statement has no WITH clause or compound (UNION/…) tail.
 	s.Complete = s.Complete &&
 		stmt.With_clause() == nil &&
-		len(cores) == 1 &&
-		stmt.Order_clause() == nil &&
-		stmt.Limit_clause() == nil
+		len(cores) == 1
 	return s
+}
+
+func buildOrderBy(oc gen.IOrder_clauseContext) []OrderTerm {
+	terms := oc.AllOrdering_term()
+	out := make([]OrderTerm, 0, len(terms))
+	for _, ot := range terms {
+		term := OrderTerm{}
+		if ad := ot.Asc_desc(); ad != nil && ad.DESC_() != nil {
+			term.Desc = true
+		}
+		if e := ot.Expr(); e != nil {
+			if op := classify(e); op.isCol {
+				term.Table, term.Column = op.table, op.col
+			} else {
+				term.Expr = origText(e)
+			}
+		}
+		out = append(out, term)
+	}
+	return out
+}
+
+func buildLimit(lc gen.ILimit_clauseContext) *Limit {
+	exprs := lc.AllExpr()
+	if len(exprs) == 0 {
+		return nil
+	}
+	lim := &Limit{Count: valueOf(exprs[0])}
+	// `LIMIT a, b` means OFFSET a, COUNT b; `LIMIT a OFFSET b` means COUNT a,
+	// OFFSET b. Distinguish by the OFFSET keyword.
+	if len(exprs) == 2 {
+		if lc.OFFSET_() != nil {
+			lim.Offset = valueOf(exprs[1])
+		} else {
+			lim.Count, lim.Offset = valueOf(exprs[1]), valueOf(exprs[0])
+		}
+	}
+	return lim
+}
+
+// valueOf classifies an expression as a literal/bind value, or nil if it is not
+// a simple value (e.g. an arithmetic expression).
+func valueOf(node antlr.Tree) *Value {
+	if op := classify(node); op.isVal {
+		return op.val
+	}
+	return nil
 }
 
 func buildCore(core gen.ISelect_coreContext) *Select {
@@ -380,6 +431,13 @@ func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
 			return Predicate{Raw: raw}
 		}
 		return Predicate{Table: r.table, Column: r.col, Op: flipOp(op), Value: l.val, Raw: raw}
+	case l.isCol && r.isCol:
+		// Column-to-column comparison (e.g. a join key). Structured so a planner
+		// can read the pair; rendering falls back to Raw.
+		return Predicate{
+			Table: l.table, Column: l.col, Op: op,
+			RefTable: r.table, RefColumn: r.col, Raw: raw,
+		}
 	default:
 		return Predicate{Raw: raw}
 	}

@@ -1,39 +1,159 @@
-// Package engine orchestrates a dfetch query: parse/validate the SQL, resolve
-// referenced tables to configured sources, fetch and load each into a
-// per-request local SQLite database, then resolve the query against it.
+// Package engine orchestrates a dfetch query: parse the SQL, resolve each
+// referenced schema to a connector, fetch and load each table into a per-request
+// local SQLite database (pushing down as much of the query as is safe), then
+// resolve the original query against it.
 package engine
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/dmashuda/dfetch/internal/config"
+	"github.com/dmashuda/dfetch/internal/localdb"
 	"github.com/dmashuda/dfetch/internal/source"
+	"github.com/dmashuda/dfetch/internal/source/github"
+	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
-// ErrNotImplemented is returned while the engine is a stub.
-var ErrNotImplemented = errors.New("not implemented")
-
-// Engine resolves dfetch queries against configured data sources.
+// Engine resolves dfetch queries against configured connectors, keyed by the SQL
+// schema they serve (e.g. "github").
 type Engine struct {
-	cfg      *config.Config
-	registry *source.Registry
+	connectors map[string]source.Connector
 }
 
-// New builds an Engine from config using the default source registry.
+// builtins are connector types that are available without configuration. Each
+// is also registered under its own name as a schema.
+var builtins = map[string]source.Factory{
+	"github": github.New,
+}
+
+// New builds an Engine: the built-in connectors plus any declared in config.
 func New(cfg *config.Config) (*Engine, error) {
-	return &Engine{cfg: cfg, registry: source.DefaultRegistry()}, nil
+	registry := source.NewRegistry()
+	for typeName, factory := range builtins {
+		registry.Register(typeName, factory)
+	}
+
+	connectors := make(map[string]source.Connector)
+	for typeName, factory := range builtins {
+		c, err := factory(nil)
+		if err != nil {
+			return nil, fmt.Errorf("initializing built-in connector %q: %w", typeName, err)
+		}
+		connectors[typeName] = c
+	}
+
+	for _, sc := range cfg.Sources {
+		c, err := registry.Build(sc.Type, sc.Params)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: %w", sc.Name, err)
+		}
+		connectors[sc.Name] = c // config can override or add schemas
+	}
+
+	return &Engine{connectors: connectors}, nil
 }
 
-// Run executes the full pipeline for a SQL query (SQLite syntax):
-//
-//  1. Parse and validate the SQL, extracting referenced table names.
-//  2. Resolve each referenced table to a configured source.
-//  3. Open a fresh per-request local SQLite database.
-//  4. For each source: create its table and load its rows.
-//  5. Resolve the original query against the local database.
-//
-// It is currently a stub.
+// Schemas returns each connector schema and the tables it serves, for
+// discovery (e.g. the `dfetch tables` command).
+func (e *Engine) Schemas() map[string][]source.TableSchema {
+	out := make(map[string][]source.TableSchema, len(e.connectors))
+	for schema, conn := range e.connectors {
+		out[schema] = conn.Tables()
+	}
+	return out
+}
+
+// Run executes the full pipeline for a SQL query (SQLite syntax).
 func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
-	return nil, ErrNotImplemented
+	q, err := sqlparse.Parse(sql)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := localdb.Open(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("opening local database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, src := range collectSources(q.Stmt) {
+		if err := e.loadSource(ctx, db, q.Stmt, src); err != nil {
+			return nil, err
+		}
+	}
+
+	res, err := db.Query(ctx, q.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("resolving query: %w", err)
+	}
+	return &Result{Columns: res.Columns, Rows: res.Rows}, nil
+}
+
+// loadSource fetches one source table (pushing down what it can) and loads it
+// into the local database under its schema.
+func (e *Engine) loadSource(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, src sqlparse.Source) error {
+	if src.Schema == "" {
+		return fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name)
+	}
+	conn, ok := e.connectors[src.Schema]
+	if !ok {
+		return fmt.Errorf("no connector for schema %q", src.Schema)
+	}
+	ts, ok := tableSchema(conn, src.Name)
+	if !ok {
+		return fmt.Errorf("connector %q has no table %q", src.Schema, src.Name)
+	}
+
+	rows, err := conn.Scan(ctx, planScan(stmt, src, ts))
+	if err != nil {
+		return fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err)
+	}
+
+	if err := db.Attach(ctx, src.Schema); err != nil {
+		return err
+	}
+	if err := db.CreateTable(ctx, src.Schema, ts); err != nil {
+		return err
+	}
+	return db.Insert(ctx, src.Schema, src.Name, rows.Columns, rows.Rows)
+}
+
+// tableSchema finds the named table among a connector's tables.
+func tableSchema(conn source.Connector, name string) (source.TableSchema, bool) {
+	for _, ts := range conn.Tables() {
+		if ts.Name == name {
+			return ts, true
+		}
+	}
+	return source.TableSchema{}, false
+}
+
+// collectSources returns the distinct base-table sources referenced anywhere in
+// the statement (including subqueries), in a stable order.
+func collectSources(s *sqlparse.Select) []sqlparse.Source {
+	seen := map[[2]string]bool{}
+	var out []sqlparse.Source
+	var walk func(*sqlparse.Select)
+	walk = func(sel *sqlparse.Select) {
+		if sel == nil {
+			return
+		}
+		for _, src := range sel.From {
+			if src.Subquery != nil {
+				walk(src.Subquery)
+				continue
+			}
+			if src.Name == "" {
+				continue // table-valued functions / raw sources
+			}
+			key := [2]string{src.Schema, src.Name}
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, src)
+			}
+		}
+	}
+	walk(s)
+	return out
 }

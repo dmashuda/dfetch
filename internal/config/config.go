@@ -9,13 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SourceConfig maps a SQL table name to a configured data source.
+// SourceConfig binds a SQL schema name to a configured connector.
 type SourceConfig struct {
-	// Table is the name referenced in SQL queries.
-	Table string `yaml:"table"`
-	// Type selects the registered source implementation (e.g. "csv", "http").
+	// Name is the SQL schema referenced in queries (e.g. "github" in
+	// github.issues).
+	Name string `yaml:"name"`
+	// Type selects the registered connector implementation (e.g. "github").
 	Type string `yaml:"type"`
-	// Params holds source-specific options.
+	// Params holds connector-specific options.
 	Params map[string]any `yaml:"params"`
 }
 

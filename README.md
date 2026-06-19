@@ -28,26 +28,53 @@ compiler and `CGO_ENABLED=1` are required to build.
 
 ## Usage
 
+A data source is a *connector* exposing tables under a SQL schema. The built-in
+`github` connector serves `github.issues`, `github.pulls`, and `github.repos`
+from the GitHub REST API. dfetch pushes filters, `ORDER BY`, and `LIMIT` down to
+the API where it safely can, then resolves the full query locally in SQLite.
+
 ```sh
-dfetch query "SELECT * FROM users JOIN orders USING (user_id)"
-dfetch query "SELECT 1" --format json   # formats: table | json | csv
+# issues for a repo, newest first
+dfetch query "SELECT number, title, state, comments
+              FROM github.issues
+              WHERE owner = 'golang' AND repo = 'go' AND state = 'open'
+              ORDER BY updated_at DESC LIMIT 10"
+
+dfetch query "SELECT number, title FROM github.issues
+              WHERE owner='octocat' AND repo='Hello-World'" --format json
+
+# discover tables and columns
+dfetch tables           # all schemas
+dfetch tables github    # one schema
+
 dfetch version
+```
+
+Column names mirror the GitHub API JSON fields (e.g. `created_at`, `updated_at`,
+`user_login`). `github.issues`/`github.pulls` require `owner` and `repo` filters
+(they're path parameters); `github.repos` requires `owner`.
+
+### Authentication
+
+Set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate; unauthenticated requests work
+but are rate-limited to 60/hour.
+
+```sh
+GITHUB_TOKEN=ghp_… dfetch query "SELECT * FROM github.repos WHERE owner='golang'"
 ```
 
 ## Configuration
 
-By default `dfetch` reads `~/.dfetch/config.yaml` (override with `--config`):
+dfetch works with no config (the `github` connector is built in). To add or
+override connectors, create `~/.dfetch/config.yaml` (override the path with
+`--config`). Each entry binds a SQL schema `name` to a connector `type`:
 
 ```yaml
 sources:
-  - table: users
-    type: csv
+  - name: gh-enterprise        # referenced as gh-enterprise.issues
+    type: github
     params:
-      path: ./users.csv
-  - table: orders
-    type: http
-    params:
-      url: https://example.com/orders.json
+      base_url: https://github.example.com/api/v3
 ```
 
 ## Development
@@ -74,10 +101,11 @@ Java. golangci-lint skips it automatically (generated-file detection), and the
 ## Project layout
 
 ```
-cmd/                 cobra CLI: root, query, version
-internal/config      YAML config loading
-internal/source      Source interface + type registry (csv, ...)
-internal/sqlparse    SQL parse/validate + table/column extraction + typed AST + SQL rendering
-internal/localdb     per-request local SQLite database
-internal/engine      orchestration: parse -> fetch -> load -> resolve
+cmd/                    cobra CLI: root, query, tables, version
+internal/config         YAML config loading (schema -> connector)
+internal/source         Connector interface + ScanRequest (push-down) + registry
+internal/source/github  GitHub connector (issues, pulls, repos)
+internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) + SQL rendering
+internal/localdb        per-request local SQLite database (attach/create/insert/query)
+internal/engine         orchestration: parse -> plan push-down -> load -> resolve
 ```

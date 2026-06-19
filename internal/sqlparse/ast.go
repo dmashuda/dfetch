@@ -9,9 +9,10 @@ package sqlparse
 // Source.Raw) so nothing is silently dropped.
 //
 // Current limitations (tracked as future work): compound selects (UNION/…),
-// WITH/CTE bodies, GROUP BY/HAVING, ORDER BY, and LIMIT are not yet modeled on
-// the AST. Query.Tables / Query.Columns remain the exhaustive flat views used
-// for fetch planning.
+// WITH/CTE bodies, and GROUP BY/HAVING are not yet modeled on the AST (their
+// presence sets Select.Complete = false). ORDER BY and LIMIT are modeled.
+// Query.Tables / Query.Columns remain the exhaustive flat views used for fetch
+// planning.
 
 // Select is the structured form of a single SELECT query.
 type Select struct {
@@ -30,6 +31,27 @@ type Select struct {
 	Joins []Join
 	// Where holds the top-level AND-ed conjuncts of the WHERE clause.
 	Where []Predicate
+	// OrderBy holds the ORDER BY terms in order, empty if none.
+	OrderBy []OrderTerm
+	// Limit holds the LIMIT/OFFSET clause, nil if none.
+	Limit *Limit
+}
+
+// OrderTerm is one ORDER BY term. Column (with optional Table qualifier) is set
+// for a simple column; otherwise Expr holds the raw text of the ordering
+// expression. Desc is true for DESC, false for ASC/unspecified.
+type OrderTerm struct {
+	Table  string
+	Column string
+	Expr   string
+	Desc   bool
+}
+
+// Limit is a LIMIT clause with an optional OFFSET. Count and Offset are the
+// literal or bind values as written (use Count.Literal.AsInt() for the number).
+type Limit struct {
+	Count  *Value
+	Offset *Value
 }
 
 // Source is a single FROM/JOIN source: a base table, a subquery, or a form
@@ -200,13 +222,19 @@ func (o Operator) String() string {
 //   - IN / NOT IN: Values holds the list, Value nil.
 //   - BETWEEN / NOT BETWEEN: Values holds [low, high], Value nil.
 //   - IS NULL / IS NOT NULL: both Value and Values are nil.
+//   - column-to-column comparison (e.g. a join key "a.x = b.y"): RefTable/
+//     RefColumn hold the right-hand column and Value/Values are nil.
 type Predicate struct {
 	Table  string // column's table qualifier ("" if unqualified)
 	Column string
 	Op     Operator
 	Value  *Value  // single right-hand value (see above)
 	Values []Value // multiple right-hand values: IN list, or BETWEEN [low, high]
-	Raw    string  // always set: original text of the conjunct
+	// RefTable/RefColumn hold the right-hand column when the comparison is
+	// column-to-column (both Value and Values are nil).
+	RefTable  string
+	RefColumn string
+	Raw       string // always set: original text of the conjunct
 }
 
 // ValueKind distinguishes a literal from a bind parameter. It is an enum so
