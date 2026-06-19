@@ -20,9 +20,9 @@ type Engine struct {
 	registry *source.Registry
 }
 
-// New builds an Engine from config using the default source registry.
+// New builds an Engine from config.
 func New(cfg *config.Config) (*Engine, error) {
-	return &Engine{cfg: cfg, registry: source.DefaultRegistry()}, nil
+	return &Engine{cfg: cfg, registry: source.NewRegistry()}, nil
 }
 
 // Run executes the full pipeline for a SQL query (SQLite syntax):
