@@ -97,16 +97,35 @@ type Projection struct {
 type Operator int
 
 const (
-	OpNone      Operator = iota // not a structured comparison
-	OpEq                        // =
-	OpNotEq                     // <>
-	OpLt                        // <
-	OpLte                       // <=
-	OpGt                        // >
-	OpGte                       // >=
-	OpLike                      // LIKE
-	OpIsNull                    // IS NULL
-	OpIsNotNull                 // IS NOT NULL
+	OpNone Operator = iota // not a structured comparison
+
+	OpEq    // =
+	OpNotEq // <>
+	OpLt    // <
+	OpLte   // <=
+	OpGt    // >
+	OpGte   // >=
+
+	OpLike      // LIKE
+	OpNotLike   // NOT LIKE
+	OpGlob      // GLOB
+	OpNotGlob   // NOT GLOB
+	OpRegexp    // REGEXP
+	OpNotRegexp // NOT REGEXP
+	OpMatch     // MATCH
+	OpNotMatch  // NOT MATCH
+
+	OpIs                // IS
+	OpIsNot             // IS NOT
+	OpIsDistinctFrom    // IS DISTINCT FROM
+	OpIsNotDistinctFrom // IS NOT DISTINCT FROM
+	OpIsNull            // IS NULL
+	OpIsNotNull         // IS NOT NULL
+
+	OpBetween    // BETWEEN (Values = [low, high])
+	OpNotBetween // NOT BETWEEN (Values = [low, high])
+	OpIn         // IN (Values = list)
+	OpNotIn      // NOT IN (Values = list)
 )
 
 // String returns the SQL form of the operator (empty for OpNone).
@@ -126,24 +145,62 @@ func (o Operator) String() string {
 		return ">="
 	case OpLike:
 		return "LIKE"
+	case OpNotLike:
+		return "NOT LIKE"
+	case OpGlob:
+		return "GLOB"
+	case OpNotGlob:
+		return "NOT GLOB"
+	case OpRegexp:
+		return "REGEXP"
+	case OpNotRegexp:
+		return "NOT REGEXP"
+	case OpMatch:
+		return "MATCH"
+	case OpNotMatch:
+		return "NOT MATCH"
+	case OpIs:
+		return "IS"
+	case OpIsNot:
+		return "IS NOT"
+	case OpIsDistinctFrom:
+		return "IS DISTINCT FROM"
+	case OpIsNotDistinctFrom:
+		return "IS NOT DISTINCT FROM"
 	case OpIsNull:
 		return "IS NULL"
 	case OpIsNotNull:
 		return "IS NOT NULL"
+	case OpBetween:
+		return "BETWEEN"
+	case OpNotBetween:
+		return "NOT BETWEEN"
+	case OpIn:
+		return "IN"
+	case OpNotIn:
+		return "NOT IN"
 	default:
 		return ""
 	}
 }
 
 // Predicate is one conjunct of a WHERE or ON clause. When Op != OpNone it is a
-// simple comparison "<Table>.<Column> Op <Value>" that may be pushable to a
-// source. Otherwise only Raw is meaningful (the original text of the conjunct).
+// structured comparison on "<Table>.<Column>" that may be pushable to a source.
+// Otherwise only Raw is meaningful (the original text of the conjunct).
+//
+// The right-hand side depends on Op:
+//   - single-value ops (=, <>, <, <=, >, >=, LIKE, GLOB, REGEXP, MATCH and their
+//     NOT forms, IS, IS NOT, IS [NOT] DISTINCT FROM): Value is set, Values nil.
+//   - IN / NOT IN: Values holds the list, Value nil.
+//   - BETWEEN / NOT BETWEEN: Values holds [low, high], Value nil.
+//   - IS NULL / IS NOT NULL: both Value and Values are nil.
 type Predicate struct {
 	Table  string // column's table qualifier ("" if unqualified)
 	Column string
 	Op     Operator
-	Value  *Value // nil for IS NULL / IS NOT NULL and for unstructured predicates
-	Raw    string // always set: original text of the conjunct
+	Value  *Value  // single right-hand value (see above)
+	Values []Value // multiple right-hand values: IN list, or BETWEEN [low, high]
+	Raw    string  // always set: original text of the conjunct
 }
 
 // ValueKind distinguishes a literal from a bind parameter. It is an enum so

@@ -176,40 +176,134 @@ func buildPredicateFromNot(n gen.IExpr_notContext) Predicate {
 
 func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate {
 	comps := bin.AllExpr_comparison()
+	// A single leading NOT inside expr_binary negates LIKE/GLOB/REGEXP/MATCH/IN/
+	// BETWEEN/IS. (The prefix NOT of `NOT (expr)` lives at expr_not, not here.)
+	not := len(bin.AllNOT_()) > 0
 
-	// IS NULL / IS NOT NULL (the `expr ISNULL` / `expr NOTNULL` / `expr NOT NULL` forms).
+	// Postfix null tests: `x ISNULL`, `x NOTNULL`, `x NOT NULL`.
 	if len(comps) == 1 {
-		if len(bin.AllISNULL_()) > 0 {
+		switch {
+		case len(bin.AllISNULL_()) > 0:
 			return nullPredicate(comps[0], OpIsNull, raw)
-		}
-		if len(bin.AllNOTNULL_()) > 0 || len(bin.AllNULL_()) > 0 {
+		case len(bin.AllNOTNULL_()) > 0, len(bin.AllNULL_()) > 0:
 			return nullPredicate(comps[0], OpIsNotNull, raw)
 		}
-		// No binary operator at this level: descend to the comparison level for
-		// the relational operators (<, <=, >, >=).
+		// No operator at this level: descend for the relational operators.
 		return buildPredicateFromComparison(comps[0], raw)
 	}
 
-	if len(comps) == 2 {
-		if op := equalityOp(bin); op != OpNone {
+	// Equality (=, <>).
+	if op := equalityOp(bin); op != OpNone && len(comps) == 2 {
+		return comparison(comps[0], comps[1], op, raw)
+	}
+
+	// Pattern match: LIKE / GLOB / REGEXP / MATCH (+ NOT). An ESCAPE clause adds
+	// a third operand; only the simple two-operand form is structured.
+	if op := patternOp(bin, not); op != OpNone {
+		if len(comps) == 2 {
 			return comparison(comps[0], comps[1], op, raw)
 		}
-		if len(bin.AllLIKE_()) > 0 {
-			return comparison(comps[0], comps[1], OpLike, raw)
+		return Predicate{Raw: raw}
+	}
+
+	// IS / IS NOT / IS NULL / IS [NOT] DISTINCT FROM.
+	if len(bin.AllIS_()) > 0 && len(comps) == 2 {
+		return isPredicate(bin, comps[0], comps[1], not, raw)
+	}
+
+	// BETWEEN / NOT BETWEEN: [tested, low, high].
+	if len(bin.AllBETWEEN_()) > 0 && len(comps) == 3 {
+		return betweenPredicate(comps[0], comps[1], comps[2], not, raw)
+	}
+
+	// IN / NOT IN (value-list form only; subquery/table forms stay raw).
+	if len(bin.AllIN_()) > 0 {
+		return inPredicate(bin, comps, not, raw)
+	}
+
+	return Predicate{Raw: raw}
+}
+
+// ifNot picks the negated operator when not is set.
+func ifNot(not bool, affirmative, negated Operator) Operator {
+	if not {
+		return negated
+	}
+	return affirmative
+}
+
+func patternOp(bin gen.IExpr_binaryContext, not bool) Operator {
+	switch {
+	case len(bin.AllLIKE_()) > 0:
+		return ifNot(not, OpLike, OpNotLike)
+	case len(bin.AllGLOB_()) > 0:
+		return ifNot(not, OpGlob, OpNotGlob)
+	case len(bin.AllREGEXP_()) > 0:
+		return ifNot(not, OpRegexp, OpNotRegexp)
+	case len(bin.AllMATCH_()) > 0:
+		return ifNot(not, OpMatch, OpNotMatch)
+	}
+	return OpNone
+}
+
+func isPredicate(bin gen.IExpr_binaryContext, lhs, rhs antlr.Tree, not bool, raw string) Predicate {
+	distinct := len(bin.AllDISTINCT_()) > 0 && len(bin.AllFROM_()) > 0
+	if !distinct {
+		// `x IS NULL` / `x IS NOT NULL`.
+		if r := classify(rhs); r.isVal && r.val.Literal.IsNull() {
+			return nullPredicate(lhs, ifNot(not, OpIsNull, OpIsNotNull), raw)
 		}
-		// x IS NULL / x IS NOT NULL (the `IS NULL` form; the bare ISNULL/NOTNULL
-		// keywords are handled in the single-operand branch above).
-		if len(bin.AllIS_()) > 0 {
-			if r := classify(comps[1]); r.isVal && r.val.Literal.IsNull() {
-				op := OpIsNull
-				if len(bin.AllNOT_()) > 0 {
-					op = OpIsNotNull
-				}
-				return nullPredicate(comps[0], op, raw)
-			}
+	}
+	op := ifNot(not, OpIs, OpIsNot)
+	if distinct {
+		op = ifNot(not, OpIsDistinctFrom, OpIsNotDistinctFrom)
+	}
+	return comparison(lhs, rhs, op, raw)
+}
+
+func betweenPredicate(tested, low, high antlr.Tree, not bool, raw string) Predicate {
+	t, lo, hi := classify(tested), classify(low), classify(high)
+	if t.isCol && lo.isVal && hi.isVal {
+		return Predicate{
+			Table:  t.table,
+			Column: t.col,
+			Op:     ifNot(not, OpBetween, OpNotBetween),
+			Values: []Value{*lo.val, *hi.val},
+			Raw:    raw,
 		}
 	}
 	return Predicate{Raw: raw}
+}
+
+func inPredicate(bin gen.IExpr_binaryContext, comps []gen.IExpr_comparisonContext, not bool, raw string) Predicate {
+	// Only the parenthesized value-list form is structured; IN (subquery),
+	// IN table, and IN table_function(...) are left raw.
+	if len(bin.AllOPEN_PAR()) == 0 ||
+		len(bin.AllSelect_stmt()) > 0 ||
+		len(bin.AllTable_name()) > 0 ||
+		len(bin.AllTable_function_name()) > 0 ||
+		len(comps) == 0 {
+		return Predicate{Raw: raw}
+	}
+	tested := classify(comps[0])
+	if !tested.isCol {
+		return Predicate{Raw: raw}
+	}
+	values := make([]Value, 0, len(comps)-1)
+	for _, item := range comps[1:] {
+		c := classify(item)
+		if !c.isVal {
+			return Predicate{Raw: raw}
+		}
+		values = append(values, *c.val)
+	}
+	return Predicate{
+		Table:  tested.table,
+		Column: tested.col,
+		Op:     ifNot(not, OpIn, OpNotIn),
+		Values: values,
+		Raw:    raw,
+	}
 }
 
 func buildPredicateFromComparison(comp gen.IExpr_comparisonContext, raw string) Predicate {
