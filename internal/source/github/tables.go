@@ -117,14 +117,14 @@ func nullable(s *string) any {
 
 // --- issues ---
 
-func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*source.Rows, error) {
+func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	owner, err := requireStringEq(req, "owner")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	repo, err := requireStringEq(req, "repo")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	q := url.Values{}
@@ -143,40 +143,50 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*so
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/issues?" + q.Encode()
 
-	var rows [][]any
+	sent := 0
 	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
 		var items []ghIssue
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
-			return nil, err
+			return err
 		}
+		page := make([][]any, 0, len(items))
 		for _, it := range items {
 			if it.PullRequest != nil {
 				continue // the issues endpoint also returns PRs; exclude them
 			}
-			rows = append(rows, []any{
+			page = append(page, []any{
 				owner, repo, it.Number, it.Title, it.State, login(it.User),
 				it.Comments, labelNames(it.Labels),
 				it.CreatedAt, it.UpdatedAt, nullable(it.ClosedAt), it.Body, it.HTMLURL,
 			})
-			if pushLimit && len(rows) >= stopAt {
-				return &source.Rows{Columns: colNames(issuesCols), Rows: rows}, nil
+			sent++
+			if pushLimit && sent >= stopAt {
+				break
 			}
 		}
+		if len(page) > 0 {
+			if err := emit(&source.Rows{Columns: colNames(issuesCols), Rows: page}); err != nil {
+				return err
+			}
+		}
+		if pushLimit && sent >= stopAt {
+			return nil
+		}
 	}
-	return &source.Rows{Columns: colNames(issuesCols), Rows: rows}, nil
+	return nil
 }
 
 // --- pulls ---
 
-func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*source.Rows, error) {
+func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	owner, err := requireStringEq(req, "owner")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	repo, err := requireStringEq(req, "repo")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	q := url.Values{}
@@ -195,32 +205,42 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*sou
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/pulls?" + q.Encode()
 
-	var rows [][]any
+	sent := 0
 	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
 		var items []ghPull
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
-			return nil, err
+			return err
 		}
+		page := make([][]any, 0, len(items))
 		for _, it := range items {
-			rows = append(rows, []any{
+			page = append(page, []any{
 				owner, repo, it.Number, it.Title, it.State, login(it.User),
 				it.Draft, it.CreatedAt, it.UpdatedAt, nullable(it.MergedAt), it.Body, it.HTMLURL,
 			})
-			if pushLimit && len(rows) >= stopAt {
-				return &source.Rows{Columns: colNames(pullsCols), Rows: rows}, nil
+			sent++
+			if pushLimit && sent >= stopAt {
+				break
 			}
 		}
+		if len(page) > 0 {
+			if err := emit(&source.Rows{Columns: colNames(pullsCols), Rows: page}); err != nil {
+				return err
+			}
+		}
+		if pushLimit && sent >= stopAt {
+			return nil
+		}
 	}
-	return &source.Rows{Columns: colNames(pullsCols), Rows: rows}, nil
+	return nil
 }
 
 // --- repos ---
 
-func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*source.Rows, error) {
+func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	owner, err := requireStringEq(req, "owner")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// A name/repo filter selects a single repository; otherwise list the owner's.
@@ -231,9 +251,9 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 	if hasName {
 		var r ghRepo
 		if _, err := c.getJSON(ctx, c.baseURL+"/repos/"+escapePath(owner)+"/"+escapePath(name), &r); err != nil {
-			return nil, err
+			return err
 		}
-		return &source.Rows{Columns: colNames(reposCols), Rows: [][]any{repoRow(owner, r)}}, nil
+		return emit(&source.Rows{Columns: colNames(reposCols), Rows: [][]any{repoRow(owner, r)}})
 	}
 
 	q := url.Values{}
@@ -250,21 +270,31 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 
 	start := c.baseURL + "/users/" + escapePath(owner) + "/repos?" + q.Encode()
 
-	var rows [][]any
+	sent := 0
 	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
 		var items []ghRepo
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
-			return nil, err
+			return err
 		}
+		page := make([][]any, 0, len(items))
 		for _, it := range items {
-			rows = append(rows, repoRow(owner, it))
-			if pushLimit && len(rows) >= stopAt {
-				return &source.Rows{Columns: colNames(reposCols), Rows: rows}, nil
+			page = append(page, repoRow(owner, it))
+			sent++
+			if pushLimit && sent >= stopAt {
+				break
 			}
 		}
+		if len(page) > 0 {
+			if err := emit(&source.Rows{Columns: colNames(reposCols), Rows: page}); err != nil {
+				return err
+			}
+		}
+		if pushLimit && sent >= stopAt {
+			return nil
+		}
 	}
-	return &source.Rows{Columns: colNames(reposCols), Rows: rows}, nil
+	return nil
 }
 
 func repoRow(owner string, r ghRepo) []any {

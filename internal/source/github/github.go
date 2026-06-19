@@ -70,17 +70,17 @@ func (c *Connector) Tables() []source.TableSchema {
 	}
 }
 
-// Scan dispatches to the per-table fetchers.
-func (c *Connector) Scan(ctx context.Context, req source.ScanRequest) (*source.Rows, error) {
+// Scan dispatches to the per-table fetchers, which emit one chunk per API page.
+func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	switch req.Table {
 	case "issues":
-		return c.scanIssues(ctx, req)
+		return c.scanIssues(ctx, req, emit)
 	case "pulls":
-		return c.scanPulls(ctx, req)
+		return c.scanPulls(ctx, req, emit)
 	case "repos":
-		return c.scanRepos(ctx, req)
+		return c.scanRepos(ctx, req, emit)
 	default:
-		return nil, fmt.Errorf("github: unknown table %q", req.Table)
+		return fmt.Errorf("github: unknown table %q", req.Table)
 	}
 }
 

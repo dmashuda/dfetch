@@ -12,8 +12,8 @@ import (
 type fakeConnector struct{}
 
 func (fakeConnector) Tables() []TableSchema { return []TableSchema{{Name: "t"}} }
-func (fakeConnector) Scan(context.Context, ScanRequest) (*Rows, error) {
-	return &Rows{}, nil
+func (fakeConnector) Scan(_ context.Context, _ ScanRequest, emit func(*Rows) error) error {
+	return emit(&Rows{})
 }
 
 func TestRegistryBuild(t *testing.T) {

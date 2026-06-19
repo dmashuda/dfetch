@@ -21,12 +21,12 @@ type fakeConn struct {
 
 func (f *fakeConn) Tables() []source.TableSchema { return f.tables }
 
-func (f *fakeConn) Scan(_ context.Context, req source.ScanRequest) (*source.Rows, error) {
+func (f *fakeConn) Scan(_ context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	f.got = req
 	if f.err != nil {
-		return nil, f.err
+		return f.err
 	}
-	return f.rows, nil
+	return emit(f.rows)
 }
 
 func issuesConn() *fakeConn {

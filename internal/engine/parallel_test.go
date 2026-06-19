@@ -25,14 +25,14 @@ func (b barrierConn) Tables() []source.TableSchema {
 	return []source.TableSchema{{Name: b.table, Columns: []source.Column{{Name: "x", Type: "INTEGER"}}}}
 }
 
-func (b barrierConn) Scan(context.Context, source.ScanRequest) (*source.Rows, error) {
+func (b barrierConn) Scan(_ context.Context, _ source.ScanRequest, emit func(*source.Rows) error) error {
 	b.arrive.Done()
 	select {
 	case <-b.release:
 	case <-time.After(2 * time.Second):
-		return nil, errors.New("scan did not run in parallel (barrier timeout)")
+		return errors.New("scan did not run in parallel (barrier timeout)")
 	}
-	return &source.Rows{Columns: []string{"x"}, Rows: [][]any{{int64(1)}}}, nil
+	return emit(&source.Rows{Columns: []string{"x"}, Rows: [][]any{{int64(1)}}})
 }
 
 func TestRunFetchesSourcesConcurrently(t *testing.T) {
