@@ -8,10 +8,7 @@ package sqlparse
 //go:generate ./scripts/gen-parser.sh
 
 import (
-	"errors"
-	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/antlr4-go/antlr/v4"
 	"github.com/dmashuda/dfetch/internal/sqlparse/gen"
@@ -48,8 +45,10 @@ func Parse(raw string) (*Query, error) {
 	p.AddErrorListener(errs)
 
 	tree := p.Parse()
-	if len(errs.msgs) > 0 {
-		return nil, fmt.Errorf("invalid SQL: %s", strings.Join(errs.msgs, "; "))
+	if len(errs.errs) > 0 {
+		// Return the first syntax error: it is the most precise, and later
+		// ANTLR errors are usually cascading noise from recovery.
+		return nil, errs.errs[0]
 	}
 
 	if err := validateReadOnlySelect(tree); err != nil {
@@ -72,25 +71,30 @@ func Parse(raw string) (*Query, error) {
 }
 
 // validateReadOnlySelect ensures the parse tree holds exactly one statement and
-// that it is a plain (non-EXPLAIN) SELECT.
+// that it is a plain (non-EXPLAIN) SELECT, reporting where the offending
+// construct is when one exists.
 func validateReadOnlySelect(tree gen.IParseContext) error {
 	list := tree.Sql_stmt_list()
 	if list == nil {
-		return errors.New("no SQL statement found")
+		return &Error{Msg: "no SQL statement found"}
 	}
 	stmts := list.AllSql_stmt()
 	switch len(stmts) {
 	case 0:
-		return errors.New("no SQL statement found")
+		return &Error{Msg: "no SQL statement found"}
 	case 1:
 		// ok
 	default:
-		return errors.New("only a single statement is supported")
+		// Point at the start of the second statement.
+		return tokenError(stmts[1].GetStart(), "only a single statement is supported, found %d", len(stmts))
 	}
 
 	st := stmts[0]
-	if st.EXPLAIN_() != nil || st.Select_stmt() == nil {
-		return errors.New("only read-only SELECT statements are supported")
+	if ex := st.EXPLAIN_(); ex != nil {
+		return tokenError(ex.GetSymbol(), "EXPLAIN is not supported; only read-only SELECT statements are allowed")
+	}
+	if st.Select_stmt() == nil {
+		return tokenError(st.GetStart(), "only read-only SELECT statements are supported")
 	}
 	return nil
 }
