@@ -77,7 +77,7 @@ Java. golangci-lint skips it automatically (generated-file detection), and the
 cmd/                 cobra CLI: root, query, version
 internal/config      YAML config loading
 internal/source      Source interface + type registry (csv, ...)
-internal/sqlparse    SQL parse/validate + table/column extraction + typed AST
+internal/sqlparse    SQL parse/validate + table/column extraction + typed AST + SQL rendering
 internal/localdb     per-request local SQLite database
 internal/engine      orchestration: parse -> fetch -> load -> resolve
 ```
