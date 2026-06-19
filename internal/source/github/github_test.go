@@ -55,7 +55,7 @@ func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
 	req := source.ScanRequest{
 		Table:   "issues",
 		Filters: []source.Filter{eqFilter("owner", "golang"), eqFilter("repo", "go"), eqFilter("state", "open")},
-		OrderBy: []source.OrderTerm{{Column: "updated", Desc: true}},
+		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
 		Limit:   intPtr(10),
 	}
 	rows, err := c.Scan(context.Background(), req)

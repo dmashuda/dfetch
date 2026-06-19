@@ -11,13 +11,24 @@ into a per-request local SQLite database, and resolves the query against it.
 ## Layout
 
 ```
-cmd/                 cobra CLI: root, query, version
-internal/config      YAML config loading (table -> source mapping)
-internal/source      Source interface + type registry (csv, ...)
-internal/sqlparse    SQL parse/validate + table/column extraction (ANTLR)
-internal/localdb     per-request local SQLite database (mattn/go-sqlite3, cgo)
-internal/engine      orchestration: parse -> fetch -> load -> resolve
+cmd/                    cobra CLI: root, query, tables, version
+internal/config         YAML config loading (schema -> connector)
+internal/source         Connector interface + ScanRequest (push-down) + registry
+internal/source/github  GitHub connector (issues/pulls/repos), stdlib net/http
+internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
+internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
+internal/engine         orchestration: parse -> plan push-down -> load -> resolve
 ```
+
+## How a query runs
+
+A connector is registered under a SQL schema (e.g. `github`) and exposes tables
+(`github.issues`). `engine.Run`: parse → for each schema-qualified source, plan a
+push-down `source.ScanRequest` (filters/ORDER BY/LIMIT) and `Scan` the connector
+→ `ATTACH ':memory:' AS <schema>`, create the table, load the rows → run the
+original SQL **verbatim** against SQLite (the source of truth; connectors may
+return a superset). LIMIT is pushed only for single-source queries where the
+connector consumed every filter and honored the order.
 
 ## Conventions
 

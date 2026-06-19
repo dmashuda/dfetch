@@ -12,6 +12,9 @@ import (
 
 func col(name, typ string) source.Column { return source.Column{Name: name, Type: typ} }
 
+// Column names mirror the GitHub API JSON fields (created_at, updated_at, …) so
+// queries read the same way as the API docs. ORDER BY on a timestamp column maps
+// to the API's short sort name (created/updated/…) internally via orderParam.
 var issuesCols = []source.Column{
 	col("owner", "TEXT"), col("repo", "TEXT"), col("number", "INTEGER"),
 	col("title", "TEXT"), col("state", "TEXT"), col("user_login", "TEXT"),
@@ -130,9 +133,7 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*so
 		q.Set("state", state)
 	}
 	sort, dir, sortOK := orderParam(req.OrderBy, map[string]string{
-		"created": "created", "created_at": "created",
-		"updated": "updated", "updated_at": "updated",
-		"comments": "comments",
+		"created_at": "created", "updated_at": "updated", "comments": "comments",
 	})
 	if sortOK {
 		q.Set("sort", sort)
@@ -184,8 +185,7 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*sou
 		q.Set("state", state)
 	}
 	sort, dir, sortOK := orderParam(req.OrderBy, map[string]string{
-		"created": "created", "created_at": "created",
-		"updated": "updated", "updated_at": "updated",
+		"created_at": "created", "updated_at": "updated",
 	})
 	if sortOK {
 		q.Set("sort", sort)
@@ -239,9 +239,7 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 
 	q := url.Values{}
 	sort, dir, sortOK := orderParam(req.OrderBy, map[string]string{
-		"created": "created", "created_at": "created",
-		"updated": "updated", "updated_at": "updated",
-		"pushed": "pushed", "pushed_at": "pushed",
+		"created_at": "created", "updated_at": "updated", "pushed_at": "pushed",
 		"full_name": "full_name", "name": "full_name",
 	})
 	if sortOK {

@@ -54,6 +54,16 @@ func New(cfg *config.Config) (*Engine, error) {
 	return &Engine{connectors: connectors}, nil
 }
 
+// Schemas returns each connector schema and the tables it serves, for
+// discovery (e.g. the `dfetch tables` command).
+func (e *Engine) Schemas() map[string][]source.TableSchema {
+	out := make(map[string][]source.TableSchema, len(e.connectors))
+	for schema, conn := range e.connectors {
+		out[schema] = conn.Tables()
+	}
+	return out
+}
+
 // Run executes the full pipeline for a SQL query (SQLite syntax).
 func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 	q, err := sqlparse.Parse(sql)
