@@ -98,6 +98,15 @@ func TestRoundTrip(t *testing.T) {
 		"SELECT * FROM t WHERE a = TRUE",
 		"SELECT * FROM t WHERE a = X'4142'",
 
+		// order by / limit
+		"SELECT * FROM t ORDER BY a",
+		"SELECT * FROM t ORDER BY a DESC, b",
+		"SELECT * FROM t ORDER BY t.created DESC",
+		"SELECT * FROM t LIMIT 10",
+		"SELECT * FROM t LIMIT 10 OFFSET 5",
+		"SELECT * FROM t WHERE a = 1 ORDER BY updated DESC LIMIT 10",
+		"SELECT number, title FROM github.issues WHERE owner = 'golang' AND repo = 'go' AND state = 'open' ORDER BY updated DESC LIMIT 10",
+
 		// composition + unstructured fallbacks
 		"SELECT * FROM t WHERE a = 1 AND b < 2 AND c IS NULL",
 		"SELECT * FROM t WHERE p = 1 OR q = 2",

@@ -55,6 +55,10 @@ func TestSelectComplete(t *testing.T) {
 		"SELECT a FROM t WHERE a = 1",
 		"SELECT a, b FROM t JOIN u ON t.id = u.id",
 		"SELECT DISTINCT a FROM t",
+		// ORDER BY and LIMIT are modeled, so they remain complete:
+		"SELECT a FROM t ORDER BY a",
+		"SELECT a FROM t LIMIT 10",
+		"SELECT a FROM t ORDER BY a LIMIT 10",
 	}
 	for _, sql := range complete {
 		t.Run("complete/"+sql, func(t *testing.T) {
@@ -63,13 +67,10 @@ func TestSelectComplete(t *testing.T) {
 	}
 
 	lossy := []string{
-		"SELECT a FROM t ORDER BY a",
-		"SELECT a FROM t LIMIT 10",
 		"SELECT dept, count(*) FROM t GROUP BY dept",
 		"SELECT dept FROM t GROUP BY dept HAVING count(*) > 1",
 		"WITH x AS (SELECT 1) SELECT * FROM x",
 		"SELECT a FROM t UNION SELECT a FROM u",
-		"SELECT a FROM t ORDER BY a LIMIT 10",
 	}
 	for _, sql := range lossy {
 		t.Run("lossy/"+sql, func(t *testing.T) {

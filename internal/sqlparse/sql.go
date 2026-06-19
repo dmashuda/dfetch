@@ -93,7 +93,39 @@ func (s *Select) SQL() string {
 		b.WriteString(" WHERE ")
 		b.WriteString(renderPredicates(s.Where))
 	}
+	if len(s.OrderBy) > 0 {
+		b.WriteString(" ORDER BY ")
+		terms := make([]string, len(s.OrderBy))
+		for i, t := range s.OrderBy {
+			terms[i] = t.sql()
+		}
+		b.WriteString(strings.Join(terms, ", "))
+	}
+	if s.Limit != nil {
+		if s.Limit.Count != nil {
+			b.WriteString(" LIMIT " + s.Limit.Count.sql())
+		}
+		if s.Limit.Offset != nil {
+			b.WriteString(" OFFSET " + s.Limit.Offset.sql())
+		}
+	}
 	return b.String()
+}
+
+func (t OrderTerm) sql() string {
+	var s string
+	switch {
+	case t.Column != "" && t.Table != "":
+		s = quoteIdent(t.Table) + "." + quoteIdent(t.Column)
+	case t.Column != "":
+		s = quoteIdent(t.Column)
+	default:
+		s = t.Expr
+	}
+	if t.Desc {
+		s += " DESC"
+	}
+	return s
 }
 
 func (p Projection) sql() string {
