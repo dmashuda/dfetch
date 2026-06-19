@@ -92,37 +92,49 @@ func (db *DB) CreateTable(ctx context.Context, schema string, ts source.TableSch
 	return nil
 }
 
-// Insert loads rows into a previously created table. Each row's values must be
-// ordered to match cols.
+// maxBindParams is a conservative cap on bind parameters per statement
+// (SQLite's classic SQLITE_MAX_VARIABLE_NUMBER), used to size insert batches.
+const maxBindParams = 999
+
+// Insert loads rows into a previously created table in batched multi-row INSERTs.
+// Each row's values must be ordered to match cols.
 func (db *DB) Insert(ctx context.Context, schema, table string, cols []string, rows [][]any) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	for _, row := range rows {
+		if len(row) != len(cols) {
+			return fmt.Errorf("row has %d values, table %q has %d columns", len(row), table, len(cols))
+		}
+	}
+
 	quoted := make([]string, len(cols))
 	for i, c := range cols {
 		quoted[i] = quoteIdent(c)
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(cols)), ",")
-	stmtSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		qualify(schema, table), strings.Join(quoted, ", "), placeholders)
+	prefix := fmt.Sprintf("INSERT INTO %s (%s) VALUES ", qualify(schema, table), strings.Join(quoted, ", "))
+	rowPlaceholder := "(" + strings.TrimSuffix(strings.Repeat("?,", len(cols)), ",") + ")"
+
+	// As many rows per statement as fit under the bind-parameter cap.
+	batchRows := maxBindParams / len(cols)
+	if batchRows < 1 {
+		batchRows = 1
+	}
 
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, stmtSQL)
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
+	for start := 0; start < len(rows); start += batchRows {
+		end := min(start+batchRows, len(rows))
+		batch := rows[start:end]
 
-	for _, row := range rows {
-		if len(row) != len(cols) {
-			_ = tx.Rollback()
-			return fmt.Errorf("row has %d values, table %q has %d columns", len(row), table, len(cols))
+		values := strings.TrimSuffix(strings.Repeat(rowPlaceholder+",", len(batch)), ",")
+		args := make([]any, 0, len(batch)*len(cols))
+		for _, row := range batch {
+			args = append(args, row...)
 		}
-		if _, err := stmt.ExecContext(ctx, row...); err != nil {
+		if _, err := tx.ExecContext(ctx, prefix+values, args...); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("inserting into %s: %w", qualify(schema, table), err)
 		}
