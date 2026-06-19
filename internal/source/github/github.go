@@ -16,6 +16,7 @@ import (
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const defaultBaseURL = "https://api.github.com"
@@ -36,7 +37,12 @@ type Connector struct {
 // $GH_TOKEN; unauthenticated requests work but are heavily rate-limited.
 func New(params map[string]any) (source.Connector, error) {
 	c := &Connector{
-		client:  &http.Client{Timeout: 30 * time.Second},
+		// otelhttp.NewTransport adds an OpenTelemetry client span per request
+		// (a no-op until a tracer provider is installed).
+		client: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
 		baseURL: defaultBaseURL,
 		token:   firstEnv("GITHUB_TOKEN", "GH_TOKEN"),
 	}

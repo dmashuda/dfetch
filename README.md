@@ -77,6 +77,37 @@ sources:
       base_url: https://github.example.com/api/v3
 ```
 
+## Tracing
+
+dfetch is instrumented with OpenTelemetry. Tracing is **off unless an OTLP
+endpoint is configured** — without it there's no exporter and effectively no
+overhead. To capture traces for debugging, run the bundled Jaeger and point
+dfetch at it:
+
+```sh
+docker compose up -d                                   # Jaeger (UI on :16686)
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+dfetch query "SELECT number, title FROM github.issues
+              WHERE owner='golang' AND repo='go' AND state='open'
+              ORDER BY updated_at DESC LIMIT 5"
+# open http://localhost:16686 and pick service "dfetch"
+```
+
+Each query is one trace:
+
+```
+engine.Run (db.query.text=<sql>)
+├─ engine.loadSource (github.issues)
+│  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
+│  └─ ATTACH / CREATE / INSERT (otelsql)
+└─ SELECT                      (the local resolve; otelsql)
+```
+
+Use it to see how many GitHub API calls a query made (pagination shows as
+multiple `GET` spans), where latency went (API vs. local SQL), and which step
+failed (failed spans are marked with the error). Set `OTEL_SERVICE_NAME` or other
+standard `OTEL_*` vars to customize; `OTEL_SDK_DISABLED=true` forces tracing off.
+
 ## Development
 
 ```sh
@@ -108,4 +139,5 @@ internal/source/github  GitHub connector (issues, pulls, repos)
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve
+internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 ```

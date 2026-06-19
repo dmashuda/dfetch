@@ -18,6 +18,7 @@ internal/source/github  GitHub connector (issues/pulls/repos), stdlib net/http
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
 internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve
+internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 ```
 
 ## How a query runs
@@ -29,6 +30,26 @@ push-down `source.ScanRequest` (filters/ORDER BY/LIMIT) and `Scan` the connector
 original SQL **verbatim** against SQLite (the source of truth; connectors may
 return a superset). LIMIT is pushed only for single-source queries where the
 connector consumed every filter and honored the order.
+
+## Debugging with traces
+
+dfetch emits OpenTelemetry traces (`internal/telemetry`). Tracing is **off
+unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set**, so it never interferes with normal
+runs. To inspect what a query does:
+
+```sh
+docker compose up -d                                   # Jaeger UI on :16686
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+go run . query "<sql>"
+# open http://localhost:16686, service "dfetch"
+```
+
+One query = one trace: `engine.Run → engine.loadSource → connector.scan → HTTP
+GET` (one per API page, via `otelhttp`) plus the SQLite `ATTACH/CREATE/INSERT/
+SELECT` spans (via `XSAM/otelsql`). Use it to see API-call count, where time went
+(API vs. local SQL), and which step errored. Instrumentation lives in the library
+wraps (`github.New` transport, `localdb.Open` driver) and engine app-spans; new
+code in those layers should keep `context` threaded so spans nest correctly.
 
 ## Conventions
 

@@ -1,0 +1,14 @@
+# Local tracing backend for dfetch. Start with `docker compose up -d`, then point
+# dfetch at it: export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# View traces at http://localhost:16686 (service: dfetch).
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: dfetch-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4318:4318"   # OTLP/HTTP (dfetch exports here)
+      - "4317:4317"   # OTLP/gRPC
+    restart: unless-stopped
