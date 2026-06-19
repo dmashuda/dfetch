@@ -107,19 +107,84 @@ func TestRoundTrip(t *testing.T) {
 
 	for _, sql := range cases {
 		t.Run(sql, func(t *testing.T) {
-			q1, err := Parse(sql)
-			require.NoError(t, err)
-
-			rendered := q1.SQL()
-
-			q2, err := Parse(rendered)
-			require.NoErrorf(t, err, "rendered SQL did not parse: %q", rendered)
-
-			// Rendering is stable: a second pass produces identical text.
-			assert.Equal(t, rendered, q2.SQL(), "render is not idempotent")
-
-			// The structured AST is preserved across the round trip.
-			assert.Equal(t, clearText(q1.Stmt), clearText(q2.Stmt), "structure changed across round trip\nrendered: %s", rendered)
+			assertRoundTrips(t, sql)
 		})
 	}
+}
+
+// TestRoundTripComplex exercises bigger, messy queries that combine multiple
+// joins, subqueries, aliases, and WHERE clauses mixing comparisons, identity,
+// pattern, range, and set operators (with raw fallbacks like OR and column-to-
+// column predicates interleaved).
+func TestRoundTripComplex(t *testing.T) {
+	cases := map[string]string{
+		"orders with subquery join and mixed filters": `
+			SELECT u.id, u.name AS customer, o.total, p.label
+			FROM main.users AS u
+			JOIN orders AS o ON o.user_id = u.id
+			LEFT JOIN (SELECT id, label FROM products WHERE active = TRUE) AS p ON p.id = o.product_id
+			WHERE u.age BETWEEN 21 AND 65
+			  AND o.status IN ('paid', 'shipped')
+			  AND u.email NOT LIKE '%@test.com'
+			  AND o.deleted_at IS NULL
+			  AND u.region IS NOT DISTINCT FROM :region`,
+
+		"self join with binds and column-to-column predicate": `
+			SELECT a.id, b.id
+			FROM edges AS a
+			JOIN edges AS b ON a.dst = b.src
+			WHERE a.weight >= :min AND b.weight < 100 AND a.kind <> b.kind AND a.label GLOB 'n*'`,
+
+		"three way join with using, natural, in-list and quoted identifiers": `
+			SELECT DISTINCT t."first name", c.country
+			FROM "user table" AS t
+			JOIN contacts AS c USING (user_id)
+			NATURAL JOIN regions
+			WHERE c.country IN ('US', 'CA', 'MX')
+			  AND t."first name" IS NOT NULL
+			  AND c.score > 0.5`,
+
+		"derived table with not-between, blob and is-distinct-from": `
+			SELECT s.id, s.amount
+			FROM (SELECT id, amount, acct FROM sales WHERE amount > 1000) AS s
+			JOIN accounts AS a ON a.id = s.acct
+			WHERE a.type = 'premium'
+			  AND s.amount NOT BETWEEN 0 AND 100
+			  AND a.token = X'deadbeef'
+			  AND a.flags IS DISTINCT FROM 0`,
+
+		"cross join, multi-key on, parenthesized or fallback": `
+			SELECT p.sku, p.price, w.qty
+			FROM products AS p
+			CROSS JOIN warehouses AS w
+			JOIN inventory AS i ON i.sku = p.sku AND i.wid = w.id
+			WHERE (p.price < 10 OR p.price > 1000)
+			  AND p.category IN ('a', 'b', 'c')
+			  AND w.region LIKE 'EU%'
+			  AND i.qty IS NOT NULL`,
+	}
+
+	for name, sql := range cases {
+		t.Run(name, func(t *testing.T) {
+			assertRoundTrips(t, sql)
+		})
+	}
+}
+
+func assertRoundTrips(t *testing.T, sql string) {
+	t.Helper()
+
+	q1, err := Parse(sql)
+	require.NoError(t, err)
+
+	rendered := q1.SQL()
+
+	q2, err := Parse(rendered)
+	require.NoErrorf(t, err, "rendered SQL did not parse: %q", rendered)
+
+	// Rendering is stable: a second pass produces identical text.
+	assert.Equal(t, rendered, q2.SQL(), "render is not idempotent")
+
+	// The structured AST is preserved across the round trip.
+	assert.Equal(t, clearText(q1.Stmt), clearText(q2.Stmt), "structure changed across round trip\nrendered: %s", rendered)
 }
