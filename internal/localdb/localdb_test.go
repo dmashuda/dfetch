@@ -2,6 +2,7 @@ package localdb
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -27,6 +28,47 @@ func issuesSchema() source.TableSchema {
 			{Name: "state", Type: "TEXT"},
 		},
 	}
+}
+
+// TestInsertBulkAcrossBatches inserts more rows than a single batch can hold
+// (with a 13-column schema the batch is well under 1500), exercising the
+// multi-row/multi-batch path and confirming every row lands in order.
+func TestInsertBulkAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	// 13 columns => batchRows = 999/13 = 76, so 1500 rows spans many batches.
+	cols := make([]source.Column, 13)
+	for i := range cols {
+		cols[i] = source.Column{Name: "c" + strconv.Itoa(i), Type: "INTEGER"}
+	}
+	ts := source.TableSchema{Name: "wide", Columns: cols}
+	require.NoError(t, db.CreateTable(ctx, "", ts))
+
+	const n = 1500
+	rows := make([][]any, n)
+	for i := range rows {
+		row := make([]any, len(cols))
+		row[0] = int64(i) // c0 = row index
+		for j := 1; j < len(cols); j++ {
+			row[j] = int64(0)
+		}
+		rows[i] = row
+	}
+	require.NoError(t, db.Insert(ctx, "", ts.Name, ts.ColumnNames(), rows))
+
+	res, err := db.Query(ctx, `SELECT COUNT(*), MIN(c0), MAX(c0) FROM wide`)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, int64(n), res.Rows[0][0])
+	assert.Equal(t, int64(0), res.Rows[0][1])
+	assert.Equal(t, int64(n-1), res.Rows[0][2])
+
+	// Spot-check a row in a later batch resolves correctly.
+	res, err = db.Query(ctx, `SELECT c0 FROM wide WHERE c0 = 1234`)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, int64(1234), res.Rows[0][0])
 }
 
 func TestOpenClose(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 )
 
 // Engine resolves dfetch queries against configured connectors, keyed by the SQL
@@ -86,8 +87,20 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 	}
 	defer func() { _ = db.Close() }()
 
-	for _, src := range collectSources(q.Stmt) {
-		if err := e.loadSource(ctx, db, q.Stmt, src); err != nil {
+	// Fetch every source's rows concurrently (network-bound), then load them
+	// serially onto the local database's single connection.
+	loaded, err := e.fetchSources(ctx, q.Stmt, collectSources(q.Stmt))
+	if err != nil {
+		return nil, recordErr(span, err)
+	}
+	for _, ld := range loaded {
+		if err := db.Attach(ctx, ld.src.Schema); err != nil {
+			return nil, recordErr(span, err)
+		}
+		if err := db.CreateTable(ctx, ld.src.Schema, ld.ts); err != nil {
+			return nil, recordErr(span, err)
+		}
+		if err := db.Insert(ctx, ld.src.Schema, ld.src.Name, ld.rows.Columns, ld.rows.Rows); err != nil {
 			return nil, recordErr(span, err)
 		}
 	}
@@ -106,44 +119,66 @@ func recordErr(span trace.Span, err error) error {
 	return err
 }
 
-// loadSource fetches one source table (pushing down what it can) and loads it
-// into the local database under its schema.
-func (e *Engine) loadSource(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, src sqlparse.Source) error {
-	ctx, span := telemetry.Tracer().Start(ctx, "engine.loadSource",
-		trace.WithAttributes(
-			attribute.String("db.namespace", src.Schema),
-			attribute.String("db.collection.name", src.Name),
-		))
-	defer span.End()
+// maxConcurrentFetches caps how many sources are fetched at once so a query over
+// many tables doesn't open an unbounded number of API connections.
+const maxConcurrentFetches = 8
 
+// loadedSource is a fetched source ready to be loaded into the local database.
+type loadedSource struct {
+	src  sqlparse.Source
+	ts   source.TableSchema
+	rows *source.Rows
+}
+
+// fetchSources scans every source concurrently and returns the results in the
+// original order. The first error cancels the remaining scans.
+func (e *Engine) fetchSources(ctx context.Context, stmt *sqlparse.Select, sources []sqlparse.Source) ([]loadedSource, error) {
+	out := make([]loadedSource, len(sources))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentFetches)
+
+	for i, src := range sources {
+		i, src := i, src
+		g.Go(func() error {
+			conn, ts, err := e.resolveSource(src)
+			if err != nil {
+				return err
+			}
+			// Wrap the connector call so its HTTP client spans nest under it.
+			scanCtx, scanSpan := telemetry.Tracer().Start(gctx, "connector.scan",
+				trace.WithAttributes(
+					attribute.String("db.namespace", src.Schema),
+					attribute.String("db.collection.name", src.Name),
+				))
+			rows, err := conn.Scan(scanCtx, planScan(stmt, src, ts))
+			scanSpan.End()
+			if err != nil {
+				return fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err)
+			}
+			out[i] = loadedSource{src: src, ts: ts, rows: rows}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// resolveSource maps a schema-qualified source to its connector and table schema.
+func (e *Engine) resolveSource(src sqlparse.Source) (source.Connector, source.TableSchema, error) {
 	if src.Schema == "" {
-		return recordErr(span, fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name))
+		return nil, source.TableSchema{}, fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name)
 	}
 	conn, ok := e.connectors[src.Schema]
 	if !ok {
-		return recordErr(span, fmt.Errorf("no connector for schema %q", src.Schema))
+		return nil, source.TableSchema{}, fmt.Errorf("no connector for schema %q", src.Schema)
 	}
 	ts, ok := tableSchema(conn, src.Name)
 	if !ok {
-		return recordErr(span, fmt.Errorf("connector %q has no table %q", src.Schema, src.Name))
+		return nil, source.TableSchema{}, fmt.Errorf("connector %q has no table %q", src.Schema, src.Name)
 	}
-
-	// Wrap the connector call so its HTTP client spans nest under connector.scan.
-	scanCtx, scanSpan := telemetry.Tracer().Start(ctx, "connector.scan",
-		trace.WithAttributes(attribute.String("db.collection.name", src.Name)))
-	rows, err := conn.Scan(scanCtx, planScan(stmt, src, ts))
-	scanSpan.End()
-	if err != nil {
-		return recordErr(span, fmt.Errorf("scanning %s.%s: %w", src.Schema, src.Name, err))
-	}
-
-	if err := db.Attach(ctx, src.Schema); err != nil {
-		return recordErr(span, err)
-	}
-	if err := db.CreateTable(ctx, src.Schema, ts); err != nil {
-		return recordErr(span, err)
-	}
-	return db.Insert(ctx, src.Schema, src.Name, rows.Columns, rows.Rows)
+	return conn, ts, nil
 }
 
 // tableSchema finds the named table among a connector's tables.

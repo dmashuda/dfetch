@@ -28,8 +28,14 @@ A connector is registered under a SQL schema (e.g. `github`) and exposes tables
 push-down `source.ScanRequest` (filters/ORDER BY/LIMIT) and `Scan` the connector
 → `ATTACH ':memory:' AS <schema>`, create the table, load the rows → run the
 original SQL **verbatim** against SQLite (the source of truth; connectors may
-return a superset). LIMIT is pushed only for single-source queries where the
-connector consumed every filter and honored the order.
+return a superset). Sources are fetched concurrently (`errgroup`) then loaded
+serially onto localdb's single pinned connection. LIMIT is pushed to a source
+when it's single-source, or when it's the driving source of a join the LIMIT can
+safely ride (ordering entirely on it, and the join can't drop its rows — every
+other source pinned to constants, or a leftmost source with only LEFT/CROSS
+joins); see `limitSafeForJoin` in `internal/engine/plan.go`. The connector
+additionally refuses to push unless it consumed every filter and honored the
+order.
 
 ## Debugging with traces
 

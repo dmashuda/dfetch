@@ -51,6 +51,37 @@ func issuesConn() *fakeConn {
 	}
 }
 
+// TestRunPushesJoinLimitToDrivingSource end-to-ends the join LIMIT pushdown: the
+// driving table gets LIMIT, the pinned lookup does not, and the result is the
+// correct top-N (the fake connectors return supersets, so SQLite still trims).
+func TestRunPushesJoinLimitToDrivingSource(t *testing.T) {
+	drv := &fakeConn{
+		tables: []source.TableSchema{{Name: "t", Columns: []source.Column{
+			{Name: "owner"}, {Name: "fk"}, {Name: "ts", Type: "INTEGER"},
+		}}},
+		rows: &source.Rows{Columns: []string{"owner", "fk", "ts"}, Rows: [][]any{
+			{"x", "k", int64(3)}, {"x", "k", int64(1)}, {"x", "k", int64(2)},
+		}},
+	}
+	dim := &fakeConn{
+		tables: []source.TableSchema{{Name: "u", Columns: []source.Column{{Name: "key"}, {Name: "label"}}}},
+		rows:   &source.Rows{Columns: []string{"key", "label"}, Rows: [][]any{{"k", "X"}}},
+	}
+	e := engineWith(map[string]source.Connector{"drv": drv, "dim": dim})
+
+	res, err := e.Run(context.Background(),
+		"SELECT d.ts, u.label FROM drv.t d JOIN dim.u u ON u.key = d.fk WHERE d.owner='x' AND d.fk='k' ORDER BY d.ts DESC LIMIT 2")
+	require.NoError(t, err)
+
+	require.NotNil(t, drv.got.Limit, "LIMIT pushed to the driving source")
+	assert.Equal(t, 2, *drv.got.Limit)
+	assert.Nil(t, dim.got.Limit, "LIMIT not pushed to the lookup source")
+
+	require.Len(t, res.Rows, 2)
+	assert.Equal(t, int64(3), res.Rows[0][0])
+	assert.Equal(t, int64(2), res.Rows[1][0])
+}
+
 func engineWith(conns map[string]source.Connector) *Engine {
 	return &Engine{connectors: conns}
 }
