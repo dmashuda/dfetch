@@ -69,7 +69,7 @@ func TestASTJoinTypes(t *testing.T) {
 		{"SELECT * FROM a, b", JoinComma},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.want)+"_"+tc.sql, func(t *testing.T) {
+		t.Run(tc.want.String()+"_"+tc.sql, func(t *testing.T) {
 			s := mustParse(t, tc.sql)
 			require.Len(t, s.Joins, 1)
 			assert.Equal(t, tc.want, s.Joins[0].Type)
@@ -96,26 +96,26 @@ func TestASTWherePredicates(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.age >= 21 AND status = 'paid' AND name LIKE 'A%' AND qty <> 0")
 	require.Len(t, s.Where, 4)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: ">=", Value: &Value{Kind: ValueLiteral, Text: "21"}, Raw: "t.age >= 21"}, s.Where[0])
-	assert.Equal(t, Predicate{Column: "status", Op: "=", Value: &Value{Kind: ValueLiteral, Text: "'paid'"}, Raw: "status = 'paid'"}, s.Where[1])
-	assert.Equal(t, Predicate{Column: "name", Op: "LIKE", Value: &Value{Kind: ValueLiteral, Text: "'A%'"}, Raw: "name LIKE 'A%'"}, s.Where[2])
-	assert.Equal(t, Predicate{Column: "qty", Op: "<>", Value: &Value{Kind: ValueLiteral, Text: "0"}, Raw: "qty <> 0"}, s.Where[3])
+	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: OpGte, Value: &Value{Kind: ValueLiteral, Text: "21"}, Raw: "t.age >= 21"}, s.Where[0])
+	assert.Equal(t, Predicate{Column: "status", Op: OpEq, Value: &Value{Kind: ValueLiteral, Text: "'paid'"}, Raw: "status = 'paid'"}, s.Where[1])
+	assert.Equal(t, Predicate{Column: "name", Op: OpLike, Value: &Value{Kind: ValueLiteral, Text: "'A%'"}, Raw: "name LIKE 'A%'"}, s.Where[2])
+	assert.Equal(t, Predicate{Column: "qty", Op: OpNotEq, Value: &Value{Kind: ValueLiteral, Text: "0"}, Raw: "qty <> 0"}, s.Where[3])
 }
 
 func TestASTPredicateOperatorFlip(t *testing.T) {
 	// value on the left flips the operator so the column leads.
 	s := mustParse(t, "SELECT * FROM t WHERE 100 > t.qty")
 	require.Len(t, s.Where, 1)
-	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: "<", Value: &Value{Kind: ValueLiteral, Text: "100"}, Raw: "100 > t.qty"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: OpLt, Value: &Value{Kind: ValueLiteral, Text: "100"}, Raw: "100 > t.qty"}, s.Where[0])
 }
 
 func TestASTPredicateBindAndNull(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.id = :id AND t.deleted IS NULL AND t.name IS NOT NULL")
 	require.Len(t, s.Where, 3)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: "=", Value: &Value{Kind: ValueBind, Text: ":id"}, Raw: "t.id = :id"}, s.Where[0])
-	assert.Equal(t, Predicate{Table: "t", Column: "deleted", Op: "IS NULL", Raw: "t.deleted IS NULL"}, s.Where[1])
-	assert.Equal(t, Predicate{Table: "t", Column: "name", Op: "IS NOT NULL", Raw: "t.name IS NOT NULL"}, s.Where[2])
+	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: OpEq, Value: &Value{Kind: ValueBind, Text: ":id"}, Raw: "t.id = :id"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "deleted", Op: OpIsNull, Raw: "t.deleted IS NULL"}, s.Where[1])
+	assert.Equal(t, Predicate{Table: "t", Column: "name", Op: OpIsNotNull, Raw: "t.name IS NOT NULL"}, s.Where[2])
 }
 
 func TestASTUnstructuredPredicatesKeepRaw(t *testing.T) {
@@ -171,4 +171,13 @@ func TestASTValuesHasNoSources(t *testing.T) {
 	s := mustParse(t, "VALUES (1), (2)")
 	assert.Empty(t, s.From)
 	assert.Empty(t, s.Projections)
+}
+
+func TestEnumStrings(t *testing.T) {
+	assert.Equal(t, "=", OpEq.String())
+	assert.Equal(t, "IS NOT NULL", OpIsNotNull.String())
+	assert.Equal(t, "", OpNone.String())
+	assert.Equal(t, "LEFT", JoinLeft.String())
+	assert.Equal(t, "literal", ValueLiteral.String())
+	assert.Equal(t, "bind", ValueBind.String())
 }

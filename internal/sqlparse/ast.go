@@ -40,17 +40,38 @@ type Source struct {
 // IsSubquery reports whether the source is a derived table (subquery).
 func (s Source) IsSubquery() bool { return s.Subquery != nil }
 
-// JoinType identifies the kind of join connecting two sources.
-type JoinType string
+// JoinType identifies the kind of join connecting two sources. It is an enum so
+// downstream consumers switch on the named constants exhaustively rather than
+// matching strings. The zero value is JoinInner.
+type JoinType int
 
 const (
-	JoinInner JoinType = "INNER"
-	JoinLeft  JoinType = "LEFT"
-	JoinRight JoinType = "RIGHT"
-	JoinFull  JoinType = "FULL"
-	JoinCross JoinType = "CROSS"
-	JoinComma JoinType = "COMMA" // implicit comma join
+	JoinInner JoinType = iota // INNER / plain JOIN
+	JoinLeft                  // LEFT [OUTER] JOIN
+	JoinRight                 // RIGHT [OUTER] JOIN
+	JoinFull                  // FULL [OUTER] JOIN
+	JoinCross                 // CROSS JOIN
+	JoinComma                 // implicit comma join
 )
+
+func (j JoinType) String() string {
+	switch j {
+	case JoinInner:
+		return "INNER"
+	case JoinLeft:
+		return "LEFT"
+	case JoinRight:
+		return "RIGHT"
+	case JoinFull:
+		return "FULL"
+	case JoinCross:
+		return "CROSS"
+	case JoinComma:
+		return "COMMA"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 // Join describes a join operator and its constraint.
 type Join struct {
@@ -69,24 +90,81 @@ type Projection struct {
 	Expr   string // raw text for non-column expressions (e.g. COUNT(*))
 }
 
-// Predicate is one conjunct of a WHERE or ON clause. When Op != "" it is a
+// Operator is a comparison operator in a structured predicate. It is an enum so
+// downstream consumers (e.g. a push-down planner) handle the full closed set via
+// an exhaustive switch rather than matching operator strings. The zero value,
+// OpNone, means the predicate is not a structured comparison (only Raw applies).
+type Operator int
+
+const (
+	OpNone      Operator = iota // not a structured comparison
+	OpEq                        // =
+	OpNotEq                     // <>
+	OpLt                        // <
+	OpLte                       // <=
+	OpGt                        // >
+	OpGte                       // >=
+	OpLike                      // LIKE
+	OpIsNull                    // IS NULL
+	OpIsNotNull                 // IS NOT NULL
+)
+
+// String returns the SQL form of the operator (empty for OpNone).
+func (o Operator) String() string {
+	switch o {
+	case OpEq:
+		return "="
+	case OpNotEq:
+		return "<>"
+	case OpLt:
+		return "<"
+	case OpLte:
+		return "<="
+	case OpGt:
+		return ">"
+	case OpGte:
+		return ">="
+	case OpLike:
+		return "LIKE"
+	case OpIsNull:
+		return "IS NULL"
+	case OpIsNotNull:
+		return "IS NOT NULL"
+	default:
+		return ""
+	}
+}
+
+// Predicate is one conjunct of a WHERE or ON clause. When Op != OpNone it is a
 // simple comparison "<Table>.<Column> Op <Value>" that may be pushable to a
 // source. Otherwise only Raw is meaningful (the original text of the conjunct).
 type Predicate struct {
 	Table  string // column's table qualifier ("" if unqualified)
 	Column string
-	Op     string // =, <>, <, <=, >, >=, LIKE, IS NULL, IS NOT NULL
+	Op     Operator
 	Value  *Value // nil for IS NULL / IS NOT NULL and for unstructured predicates
 	Raw    string // always set: original text of the conjunct
 }
 
-// ValueKind distinguishes a literal from a bind parameter.
-type ValueKind string
+// ValueKind distinguishes a literal from a bind parameter. It is an enum so
+// consumers switch on the named constants rather than matching strings.
+type ValueKind int
 
 const (
-	ValueLiteral ValueKind = "literal"
-	ValueBind    ValueKind = "bind"
+	ValueLiteral ValueKind = iota // a literal value (e.g. 5, 'abc')
+	ValueBind                     // a bind parameter (e.g. ?, :id)
 )
+
+func (v ValueKind) String() string {
+	switch v {
+	case ValueLiteral:
+		return "literal"
+	case ValueBind:
+		return "bind"
+	default:
+		return "unknown"
+	}
+}
 
 // Value is the right-hand side of a simple comparison predicate.
 type Value struct {

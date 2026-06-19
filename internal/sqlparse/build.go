@@ -178,10 +178,10 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 	// IS NULL / IS NOT NULL (the `expr ISNULL` / `expr NOTNULL` / `expr NOT NULL` forms).
 	if len(comps) == 1 {
 		if len(bin.AllISNULL_()) > 0 {
-			return nullPredicate(comps[0], "IS NULL", raw)
+			return nullPredicate(comps[0], OpIsNull, raw)
 		}
 		if len(bin.AllNOTNULL_()) > 0 || len(bin.AllNULL_()) > 0 {
-			return nullPredicate(comps[0], "IS NOT NULL", raw)
+			return nullPredicate(comps[0], OpIsNotNull, raw)
 		}
 		// No binary operator at this level: descend to the comparison level for
 		// the relational operators (<, <=, >, >=).
@@ -189,19 +189,19 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 	}
 
 	if len(comps) == 2 {
-		if op := equalityOp(bin); op != "" {
+		if op := equalityOp(bin); op != OpNone {
 			return comparison(comps[0], comps[1], op, raw)
 		}
 		if len(bin.AllLIKE_()) > 0 {
-			return comparison(comps[0], comps[1], "LIKE", raw)
+			return comparison(comps[0], comps[1], OpLike, raw)
 		}
 		// x IS NULL / x IS NOT NULL (the `IS NULL` form; the bare ISNULL/NOTNULL
 		// keywords are handled in the single-operand branch above).
 		if len(bin.AllIS_()) > 0 {
 			if r := classify(comps[1]); r.isVal && r.val.Kind == ValueLiteral && strings.EqualFold(r.val.Text, "null") {
-				op := "IS NULL"
+				op := OpIsNull
 				if len(bin.AllNOT_()) > 0 {
-					op = "IS NOT NULL"
+					op = OpIsNotNull
 				}
 				return nullPredicate(comps[0], op, raw)
 			}
@@ -212,37 +212,37 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 
 func buildPredicateFromComparison(comp gen.IExpr_comparisonContext, raw string) Predicate {
 	bits := comp.AllExpr_bitwise()
-	if op := relationalOp(comp); op != "" && len(bits) == 2 {
+	if op := relationalOp(comp); op != OpNone && len(bits) == 2 {
 		return comparison(bits[0], bits[1], op, raw)
 	}
 	return Predicate{Raw: raw}
 }
 
-func equalityOp(bin gen.IExpr_binaryContext) string {
+func equalityOp(bin gen.IExpr_binaryContext) Operator {
 	switch {
 	case len(bin.AllEQ()) > 0 || len(bin.AllASSIGN()) > 0:
-		return "="
+		return OpEq
 	case len(bin.AllNOT_EQ1()) > 0 || len(bin.AllNOT_EQ2()) > 0:
-		return "<>"
+		return OpNotEq
 	}
-	return ""
+	return OpNone
 }
 
-func relationalOp(comp gen.IExpr_comparisonContext) string {
+func relationalOp(comp gen.IExpr_comparisonContext) Operator {
 	switch {
 	case len(comp.AllLT_EQ()) > 0:
-		return "<="
+		return OpLte
 	case len(comp.AllGT_EQ()) > 0:
-		return ">="
+		return OpGte
 	case len(comp.AllLT()) > 0:
-		return "<"
+		return OpLt
 	case len(comp.AllGT()) > 0:
-		return ">"
+		return OpGt
 	}
-	return ""
+	return OpNone
 }
 
-func nullPredicate(node antlr.Tree, op, raw string) Predicate {
+func nullPredicate(node antlr.Tree, op Operator, raw string) Predicate {
 	if o := classify(node); o.isCol {
 		return Predicate{Table: o.table, Column: o.col, Op: op, Raw: raw}
 	}
@@ -251,7 +251,7 @@ func nullPredicate(node antlr.Tree, op, raw string) Predicate {
 
 // comparison builds a "column op value" predicate from two operands in either
 // order, flipping the operator when the column is on the right.
-func comparison(left, right antlr.Tree, op, raw string) Predicate {
+func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
 	l, r := classify(left), classify(right)
 	switch {
 	case l.isCol && r.isVal:
@@ -263,16 +263,16 @@ func comparison(left, right antlr.Tree, op, raw string) Predicate {
 	}
 }
 
-func flipOp(op string) string {
+func flipOp(op Operator) Operator {
 	switch op {
-	case "<":
-		return ">"
-	case "<=":
-		return ">="
-	case ">":
-		return "<"
-	case ">=":
-		return "<="
+	case OpLt:
+		return OpGt
+	case OpLte:
+		return OpGte
+	case OpGt:
+		return OpLt
+	case OpGte:
+		return OpLte
 	default: // =, <>, LIKE are unchanged (LIKE reversed is unusual but harmless)
 		return op
 	}
