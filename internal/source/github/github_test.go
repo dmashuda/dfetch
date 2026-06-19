@@ -27,6 +27,74 @@ func eqFilter(col, val string) source.Filter {
 	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
 }
 
+// tenIssues is a one-page response of 10 plain issues numbered 1..10.
+const tenIssues = `[
+	{"number":1,"state":"open"},{"number":2,"state":"open"},{"number":3,"state":"open"},
+	{"number":4,"state":"open"},{"number":5,"state":"open"},{"number":6,"state":"open"},
+	{"number":7,"state":"open"},{"number":8,"state":"open"},{"number":9,"state":"open"},
+	{"number":10,"state":"open"}]`
+
+// Fix: LIMIT push-down must account for OFFSET. With LIMIT 2 OFFSET 3 the
+// connector must fetch limit+offset=5 rows so SQLite can apply the OFFSET; if it
+// stops at 2, SQLite's OFFSET 3 over 2 rows returns nothing.
+func TestScanIssuesLimitWithOffsetFetchesEnough(t *testing.T) {
+	var gotQuery string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(tenIssues))
+	})
+
+	limit, offset := 2, 3
+	rows, err := c.Scan(context.Background(), source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
+		Limit:   &limit,
+		Offset:  &offset,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, gotQuery, "per_page=5")
+	assert.Len(t, rows.Rows, 5) // limit + offset, not just limit
+}
+
+// Fix: a multi-key ORDER BY cannot be honored by the API (one sort field), so
+// LIMIT must not be pushed — otherwise the API's single-key top-N truncates rows
+// the composite order would keep.
+func TestScanIssuesMultiTermOrderDoesNotPushLimit(t *testing.T) {
+	var gotQuery string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(tenIssues))
+	})
+
+	limit := 2
+	rows, err := c.Scan(context.Background(), source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}, {Column: "number"}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, gotQuery, "per_page=100")
+	assert.Len(t, rows.Rows, 10) // not truncated to the limit
+}
+
+// Fix: repos must store the user-supplied owner (not the API's canonical casing)
+// so the engine's verbatim WHERE owner = '<as written>' still matches the row.
+func TestScanReposPreservesOwnerCasing(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"go","full_name":"golang/go","owner":{"login":"golang"}}`))
+	})
+
+	rows, err := c.Scan(context.Background(), source.ScanRequest{
+		Table:   "repos",
+		Filters: []source.Filter{eqFilter("owner", "Golang"), eqFilter("name", "go")},
+	})
+	require.NoError(t, err)
+	require.Len(t, rows.Rows, 1)
+	assert.Equal(t, "Golang", rows.Rows[0][0]) // user's casing preserved
+}
+
 func TestTables(t *testing.T) {
 	c, err := New(nil)
 	require.NoError(t, err)

@@ -183,20 +183,30 @@ func orderParam(terms []source.OrderTerm, allowed map[string]string) (sort, dire
 	return s, direction, true
 }
 
-// pageLimit decides per_page and whether LIMIT can be pushed. Pushing LIMIT is
-// only safe when the API returns exactly the rows the query would keep — i.e.
-// every filter was consumed by the endpoint AND the ordering was honored (or
-// there is no ORDER BY). The caller passes that determination as safe.
-func pageLimit(req source.ScanRequest, safe bool) (perPage int, pushLimit bool) {
+// pageLimit decides per_page, how many rows to fetch before stopping (stopAt),
+// and whether LIMIT can be pushed. Pushing LIMIT is only safe when the API
+// returns exactly the rows the query would keep — i.e. every filter was consumed
+// by the endpoint AND the ordering was honored (or there is no ORDER BY); the
+// caller passes that determination as safe. When an OFFSET is present the
+// connector must still fetch limit+offset rows so SQLite can apply the OFFSET,
+// so stopAt accounts for it. stopAt is 0 (no early stop) when LIMIT is not pushed.
+func pageLimit(req source.ScanRequest, safe bool) (perPage, stopAt int, pushLimit bool) {
 	pushLimit = req.Limit != nil && safe
+	if !pushLimit {
+		return 100, 0, false
+	}
+	stopAt = *req.Limit
+	if req.Offset != nil {
+		stopAt += *req.Offset
+	}
 	perPage = 100
-	if pushLimit && *req.Limit < perPage {
-		perPage = *req.Limit
+	if stopAt < perPage {
+		perPage = stopAt
 	}
 	if perPage < 1 {
 		perPage = 1
 	}
-	return perPage, pushLimit
+	return perPage, stopAt, true
 }
 
 // consumedAll reports whether every filter in the request is an equality on one
@@ -216,9 +226,12 @@ func consumedAll(req source.ScanRequest, allowed ...string) bool {
 }
 
 // limitSafe combines the ordering and filter conditions under which LIMIT may be
-// pushed.
+// pushed. The API honors a single sort field, so the ordering is fully honored
+// only when there is no ORDER BY or exactly one term that maps; a multi-key
+// ORDER BY cannot be honored and must not push LIMIT.
 func limitSafe(req source.ScanRequest, sortMapped bool, allowed ...string) bool {
-	return (len(req.OrderBy) == 0 || sortMapped) && consumedAll(req, allowed...)
+	orderHonored := len(req.OrderBy) == 0 || (len(req.OrderBy) == 1 && sortMapped)
+	return orderHonored && consumedAll(req, allowed...)
 }
 
 func escapePath(s string) string { return url.PathEscape(s) }

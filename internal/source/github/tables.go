@@ -77,19 +77,18 @@ type ghPull struct {
 }
 
 type ghRepo struct {
-	Name        string  `json:"name"`
-	FullName    string  `json:"full_name"`
-	Description string  `json:"description"`
-	Language    string  `json:"language"`
-	Stars       int64   `json:"stargazers_count"`
-	Forks       int64   `json:"forks_count"`
-	OpenIssues  int64   `json:"open_issues_count"`
-	Private     bool    `json:"private"`
-	HTMLURL     string  `json:"html_url"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
-	PushedAt    string  `json:"pushed_at"`
-	Owner       *ghUser `json:"owner"`
+	Name        string `json:"name"`
+	FullName    string `json:"full_name"`
+	Description string `json:"description"`
+	Language    string `json:"language"`
+	Stars       int64  `json:"stargazers_count"`
+	Forks       int64  `json:"forks_count"`
+	OpenIssues  int64  `json:"open_issues_count"`
+	Private     bool   `json:"private"`
+	HTMLURL     string `json:"html_url"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	PushedAt    string `json:"pushed_at"`
 }
 
 // --- helpers ---
@@ -139,7 +138,7 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*so
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
+	perPage, stopAt, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/issues?" + q.Encode()
@@ -160,7 +159,7 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest) (*so
 				it.Comments, labelNames(it.Labels),
 				it.CreatedAt, it.UpdatedAt, nullable(it.ClosedAt), it.Body, it.HTMLURL,
 			})
-			if pushLimit && len(rows) >= *req.Limit {
+			if pushLimit && len(rows) >= stopAt {
 				return &source.Rows{Columns: colNames(issuesCols), Rows: rows}, nil
 			}
 		}
@@ -191,7 +190,7 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*sou
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
+	perPage, stopAt, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/pulls?" + q.Encode()
@@ -208,7 +207,7 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest) (*sou
 				owner, repo, it.Number, it.Title, it.State, login(it.User),
 				it.Draft, it.CreatedAt, it.UpdatedAt, nullable(it.MergedAt), it.Body, it.HTMLURL,
 			})
-			if pushLimit && len(rows) >= *req.Limit {
+			if pushLimit && len(rows) >= stopAt {
 				return &source.Rows{Columns: colNames(pullsCols), Rows: rows}, nil
 			}
 		}
@@ -246,7 +245,7 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "name", "repo"))
+	perPage, stopAt, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "name", "repo"))
 	q.Set("per_page", strconv.Itoa(perPage))
 
 	start := c.baseURL + "/users/" + escapePath(owner) + "/repos?" + q.Encode()
@@ -260,7 +259,7 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 		}
 		for _, it := range items {
 			rows = append(rows, repoRow(owner, it))
-			if pushLimit && len(rows) >= *req.Limit {
+			if pushLimit && len(rows) >= stopAt {
 				return &source.Rows{Columns: colNames(reposCols), Rows: rows}, nil
 			}
 		}
@@ -269,12 +268,12 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest) (*sou
 }
 
 func repoRow(owner string, r ghRepo) []any {
-	o := owner
-	if r.Owner != nil && r.Owner.Login != "" {
-		o = r.Owner.Login
-	}
+	// Store the owner exactly as the caller filtered on it (not the API's
+	// canonical casing from r.owner.login), so the engine's verbatim
+	// WHERE owner = '<as written>' still matches this row under SQLite's
+	// case-sensitive default collation.
 	return []any{
-		o, r.Name, r.FullName, r.Description, r.Language, r.Stars, r.Forks,
+		owner, r.Name, r.FullName, r.Description, r.Language, r.Stars, r.Forks,
 		r.OpenIssues, r.Private, r.HTMLURL, r.CreatedAt, r.UpdatedAt, r.PushedAt,
 	}
 }
