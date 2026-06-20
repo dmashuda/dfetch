@@ -79,7 +79,7 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 		trace.WithAttributes(semconv.DBQueryText(sql)))
 	defer span.End()
 
-	q, err := sqlparse.Parse(sql)
+	q, err := parseQuery(ctx, sql)
 	if err != nil {
 		return nil, recordErr(span, err)
 	}
@@ -115,6 +115,43 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 		return nil, recordErr(span, fmt.Errorf("resolving query: %w", err))
 	}
 	return &Result{Columns: res.Columns, Rows: res.Rows}, nil
+}
+
+// parseQuery parses sql inside its own "engine.parse" span, annotated with what
+// the parser understood — the referenced tables, table/column counts, and the
+// query's shape (sources, joins, WHERE conjuncts, ORDER BY, LIMIT, DISTINCT, and
+// whether the AST fully models the query). These make a trace useful for
+// debugging why a query planned or pushed down the way it did.
+func parseQuery(ctx context.Context, sql string) (*sqlparse.Query, error) {
+	_, span := telemetry.Tracer().Start(ctx, "engine.parse")
+	defer span.End()
+
+	q, err := sqlparse.Parse(sql)
+	if err != nil {
+		return nil, recordErr(span, err)
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.StringSlice("dfetch.parse.tables", q.Tables),
+		attribute.Int("dfetch.parse.table_count", len(q.Tables)),
+		attribute.Int("dfetch.parse.column_count", len(q.Columns)),
+	}
+	if s := q.Stmt; s != nil {
+		attrs = append(attrs,
+			attribute.Int("dfetch.parse.source_count", len(s.From)),
+			attribute.Int("dfetch.parse.join_count", len(s.Joins)),
+			attribute.Int("dfetch.parse.where_predicate_count", len(s.Where)),
+			attribute.Int("dfetch.parse.order_by_count", len(s.OrderBy)),
+			attribute.Bool("dfetch.parse.has_limit", s.Limit != nil),
+			attribute.Bool("dfetch.parse.distinct", s.Distinct),
+			// Complete is false when the parser dropped clauses the AST doesn't
+			// model (GROUP BY/HAVING, CTEs, compound UNION/…): a useful signal that
+			// push-down planning saw only part of the query.
+			attribute.Bool("dfetch.parse.fully_modeled", s.Complete),
+		)
+	}
+	span.SetAttributes(attrs...)
+	return q, nil
 }
 
 // recordErr marks span as failed and returns err unchanged, for inline use.
