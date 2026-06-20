@@ -13,6 +13,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/localdb"
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/source/github"
+	"github.com/dmashuda/dfetch/internal/source/jaeger"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +33,7 @@ type Engine struct {
 // is also registered under its own name as a schema.
 var builtins = map[string]source.Factory{
 	"github": github.New,
+	"jaeger": jaeger.New,
 }
 
 // New builds an Engine: the built-in connectors plus any declared in config.
