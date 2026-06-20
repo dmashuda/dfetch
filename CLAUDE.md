@@ -14,6 +14,7 @@ into a per-request local SQLite database, and resolves the query against it.
 cmd/                    cobra CLI: root, query, tables, version
 internal/config         YAML config loading (schema -> connector)
 internal/source         Connector interface + ScanRequest (push-down) + registry
+                        (see internal/source/README.md to add a new connector)
 internal/source/github  GitHub connector (issues/pulls/repos), stdlib net/http
 internal/source/jaeger  Jaeger connector (spans/services/operations), api_v3
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
