@@ -1,117 +1,170 @@
 # dfetch
 
-Connect and join data across any data source and query it with SQL on demand.
+Query and join data across any data source with SQL, on demand.
 
-`dfetch` takes a SQL query (SQLite syntax), parses and validates it, fetches the data from the
-referenced data sources (each exposed as a SQLite table), loads it into a **per-request local
-SQLite database**, then resolves the query against that database.
+`dfetch` takes a SQL query (SQLite syntax), validates it, fetches each referenced
+data source (exposed as a SQLite table), loads it into a **per-request local
+SQLite database**, and runs your query against that database. You get the full
+power of SQLite — joins across sources, aggregates, JSON functions — over live
+data from APIs.
 
-> **Status:** early scaffolding. The package structure, interfaces, CLI, and CI/release
-> automation are in place; the query engine is stubbed and returns `not implemented`.
-
-## How it works
-
-1. Parse and validate the SQL, extracting the referenced table names.
-2. Resolve each table to a configured data source.
-3. Open a fresh local SQLite database for the request.
-4. Fetch each source and load it into its table.
-5. Resolve the original query against the local database and return the result.
+```sh
+dfetch query "SELECT number, title, state FROM github.issues
+              WHERE owner='golang' AND repo='go' AND state='open'
+              ORDER BY updated_at DESC LIMIT 10"
+```
 
 ## Install
+
+Download a prebuilt binary from the
+[latest release](https://github.com/dmashuda/dfetch/releases/latest)
+(`linux/amd64`, `darwin/arm64`, `windows/amd64`), then put it on your `PATH`:
+
+```sh
+tar xzf dfetch_linux_amd64.tar.gz && sudo mv dfetch /usr/local/bin/
+dfetch version
+```
+
+Or install with Go:
 
 ```sh
 go install github.com/dmashuda/dfetch@latest
 ```
 
-`dfetch` links against [`mattn/go-sqlite3`](https://github.com/mattn/go-sqlite3), so a C
-compiler and `CGO_ENABLED=1` are required to build.
+dfetch links against [`mattn/go-sqlite3`](https://github.com/mattn/go-sqlite3)
+(cgo), so installing with Go needs a C compiler and `CGO_ENABLED=1`. To build
+from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Usage
+## Quick start
 
-A data source is a *connector* exposing tables under a SQL schema. The built-in
-`github` connector serves `github.issues`, `github.pulls`, and `github.repos`
-from the GitHub REST API. dfetch pushes filters, `ORDER BY`, and `LIMIT` down to
-the API where it safely can, then resolves the full query locally in SQLite.
+```sh
+# what can I query?
+dfetch tables
+
+# run a query — default output is an aligned table; --format json|csv also work
+dfetch query "SELECT number, title FROM github.issues
+              WHERE owner='octocat' AND repo='Hello-World'" --format json
+```
+
+A data source is a **connector** that exposes one or more tables under a SQL
+schema (e.g. `github.issues`). dfetch pushes filters, `ORDER BY`, and `LIMIT`
+down to each source where it safely can, then resolves the *full* query locally
+in SQLite — so the result is always correct even when a connector returns a
+superset of the rows.
+
+## Commands
+
+| command | description |
+| --- | --- |
+| `dfetch query "<sql>"` | Run a SQL query. `--format table\|json\|csv` (default `table`). |
+| `dfetch tables [schema]` | List available tables and columns, optionally for one schema. |
+| `dfetch version` | Print the version. |
+
+`--config <path>` (global) points at a config file; the default is
+`~/.dfetch/config.yaml` (see [Configuration](#configuration)).
+
+## Connectors
+
+Two connectors are built in and need no configuration. To point one at a
+non-default host (e.g. an enterprise or remote instance), or to register the same
+connector under several schemas, see [Configuration](#configuration).
+
+### GitHub — schema `github`
+
+Backed by the GitHub REST API.
+
+| table | rows | required filters |
+| --- | --- | --- |
+| `github.issues` | issues for a repo | `owner`, `repo` |
+| `github.pulls` | pull requests for a repo | `owner`, `repo` |
+| `github.repos` | a repo, or an owner's repos | `owner` |
+
+Column names mirror the GitHub API JSON fields (`created_at`, `updated_at`,
+`user_login`, …). The required filters are API path parameters, so a query
+without them errors before any request is made.
 
 ```sh
 # issues for a repo, newest first
 dfetch query "SELECT number, title, state, comments
               FROM github.issues
-              WHERE owner = 'golang' AND repo = 'go' AND state = 'open'
+              WHERE owner='golang' AND repo='go' AND state='open'
               ORDER BY updated_at DESC LIMIT 10"
 
-dfetch query "SELECT number, title FROM github.issues
-              WHERE owner='octocat' AND repo='Hello-World'" --format json
-
-# discover tables and columns
-dfetch tables           # all schemas
-dfetch tables github    # one schema
-
-dfetch version
+# join pulls to their repo
+dfetch query "SELECT p.number, p.title, r.full_name, r.stars
+              FROM github.pulls p
+              JOIN github.repos r ON r.owner=p.owner AND r.name=p.repo
+              WHERE p.owner='golang' AND p.repo='go' AND p.state='open'
+              ORDER BY p.created_at DESC LIMIT 20"
 ```
 
-Column names mirror the GitHub API JSON fields (e.g. `created_at`, `updated_at`,
-`user_login`). `github.issues`/`github.pulls` require `owner` and `repo` filters
-(they're path parameters); `github.repos` requires `owner`.
-
-### Authentication
-
-Set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate; unauthenticated requests work
-but are rate-limited to 60/hour.
+**Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate;
+unauthenticated requests work but are rate-limited to 60/hour.
 
 ```sh
 GITHUB_TOKEN=ghp_… dfetch query "SELECT * FROM github.repos WHERE owner='golang'"
 ```
 
-### Querying Jaeger traces
+### Jaeger — schema `jaeger`
 
-The built-in `jaeger` connector queries a local Jaeger instance through its
-[api_v3 query service](https://www.jaegertracing.io/docs/apis/) and serves
-`jaeger.spans` (one row per span), `jaeger.services`, and `jaeger.operations`. It
-defaults to `http://localhost:16686` — the same Jaeger the bundled
-`docker compose` runs (see [Tracing](#tracing)) — so dfetch can query its own
-traces.
+Queries a Jaeger instance through its
+[api_v3 query service](https://www.jaegertracing.io/docs/apis/) and serves your
+traces as tables. Defaults to `http://localhost:16686` — the same Jaeger the
+bundled `docker compose` runs (see [Tracing](#tracing)) — so dfetch can query
+its own traces.
+
+| table | rows | required filters |
+| --- | --- | --- |
+| `jaeger.spans` | one row per span | `service_name` |
+| `jaeger.services` | service names | — |
+| `jaeger.operations` | operations for a service | `service_name` |
 
 ```sh
 # slowest spans for a service in the last hour
 dfetch query "SELECT operation_name, duration_ms, status_code
               FROM jaeger.spans
-              WHERE service_name = 'dfetch'
+              WHERE service_name='dfetch'
               ORDER BY duration_ms DESC LIMIT 10"
+
+# every span of one trace (no service_name or time window needed for a trace_id lookup)
+dfetch query "SELECT span_id, parent_span_id, operation_name, service_name, duration_ms
+              FROM jaeger.spans WHERE trace_id='<TRACE_ID>'
+              ORDER BY start_time_unix_nano"
 
 # error spans in a window, reading a span attribute out of the JSON column
 dfetch query "SELECT operation_name,
                      json_extract(attributes, '\$.\"db.statement\"') AS sql
               FROM jaeger.spans
-              WHERE service_name = 'dfetch' AND status_code = 'error'
+              WHERE service_name='dfetch' AND status_code='error'
                 AND start_time >= '2026-06-01T00:00:00Z'"
-
-dfetch query "SELECT name, span_kind FROM jaeger.operations WHERE service_name = 'dfetch'"
-dfetch query "SELECT name FROM jaeger.services"
 ```
 
-`jaeger.spans` requires a `service_name` filter (api_v3 requires it). Push-down
-covers `service_name`, `operation_name`, a `start_time` range → the api's time
-window (defaulting to the **last hour** when none is given), and a `duration_ms`
-range. `kind` and `status_code` are the OTLP enums rendered as readable strings
-(`internal`/`server`/`client`/…, `unset`/`ok`/`error`); `attributes` is the span's
-attribute list as a JSON object, queryable with SQLite's `json_extract`. Point at
-a non-default host with the `base_url` param (see [Configuration](#configuration));
-set `JAEGER_TOKEN` for a bearer-authenticated deployment.
+Notes:
+
+- `jaeger.spans` requires a `service_name` filter (api_v3 requires it) **unless**
+  you filter by `trace_id`, which looks the trace up directly.
+- Push-down covers `service_name`, `operation_name`, a `start_time` range → the
+  api's time window (defaulting to the **last hour** when none is given), and a
+  `duration_ms` range.
+- `kind` and `status_code` are the OTLP enums as readable strings
+  (`internal`/`server`/`client`/…, `unset`/`ok`/`error`); `attributes` is the
+  span's attribute list as a JSON object, queryable with SQLite's `json_extract`.
+- Set `JAEGER_TOKEN` for a bearer-authenticated deployment.
 
 ## Configuration
 
-dfetch works with no config (the `github` connector is built in). To add or
-override connectors, create `~/.dfetch/config.yaml` (override the path with
-`--config`). Each entry binds a SQL schema `name` to a connector `type`:
+dfetch works with no config. To point a connector at a non-default host, or to
+register a connector under additional schemas, create `~/.dfetch/config.yaml`
+(or pass `--config <path>`). Each entry binds a SQL schema `name` to a connector
+`type`, with connector-specific `params`:
 
 ```yaml
 sources:
-  - name: gh-enterprise        # referenced as gh-enterprise.issues
+  - name: gh-enterprise        # queried as gh-enterprise.issues
     type: github
     params:
       base_url: https://github.example.com/api/v3
-  - name: prod-traces          # referenced as prod-traces.spans
+  - name: prod-traces          # queried as prod-traces.spans
     type: jaeger
     params:
       base_url: http://jaeger.example.com:16686
@@ -137,48 +190,22 @@ Each query is one trace:
 
 ```
 engine.Run (db.query.text=<sql>)
+├─ engine.parse               → what the parser understood (tables, joins, limit, …)
 ├─ engine.loadSource (github.issues)
 │  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
 │  └─ ATTACH / CREATE / INSERT (otelsql)
 └─ SELECT                      (the local resolve; otelsql)
 ```
 
-Use it to see how many GitHub API calls a query made (pagination shows as
-multiple `GET` spans), where latency went (API vs. local SQL), and which step
-failed (failed spans are marked with the error). Set `OTEL_SERVICE_NAME` or other
-standard `OTEL_*` vars to customize; `OTEL_SDK_DISABLED=true` forces tracing off.
+Use it to see how many API calls a query made (pagination shows as multiple `GET`
+spans), where latency went (API vs. local SQL), and which step failed (failed
+spans are marked with the error). Set `OTEL_SERVICE_NAME` or other standard
+`OTEL_*` vars to customize; `OTEL_SDK_DISABLED=true` forces tracing off.
 
-## Development
+Because the Jaeger connector queries Jaeger, you can analyze these traces with
+dfetch itself — see the [Jaeger connector](#jaeger--schema-jaeger).
 
-```sh
-make build      # build ./bin/dfetch
-make test       # run tests
-make coverage   # run tests with the coverage gate
-make lint       # golangci-lint
-make generate   # regenerate the ANTLR SQLite parser (requires Java)
-```
+## Contributing
 
-### Testing
-
-Tests use [testify](https://github.com/stretchr/testify) (`require` for fatal
-assertions, `assert` for non-fatal ones). Use it for new tests rather than
-hand-written `if got != want { t.Fatalf(...) }` checks.
-
-The SQL parser under `internal/sqlparse` is generated with ANTLR; the generated
-code under `internal/sqlparse/gen` is committed, so normal builds and CI need no
-Java. golangci-lint skips it automatically (generated-file detection), and the
-`vet`/`coverage` make targets exclude it.
-
-## Project layout
-
-```
-cmd/                    cobra CLI: root, query, tables, version
-internal/config         YAML config loading (schema -> connector)
-internal/source         Connector interface + ScanRequest (push-down) + registry
-internal/source/github  GitHub connector (issues, pulls, repos)
-internal/source/jaeger  Jaeger connector (spans, services, operations)
-internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) + SQL rendering
-internal/localdb        per-request local SQLite database (attach/create/insert/query)
-internal/engine         orchestration: parse -> plan push-down -> load -> resolve
-internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
-```
+Building from source, running the tests, and **writing a new connector** are
+covered in [CONTRIBUTING.md](CONTRIBUTING.md).
