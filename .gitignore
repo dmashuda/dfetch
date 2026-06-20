@@ -6,6 +6,11 @@ dist/
 *.dylib
 coverage.out
 
+# Profiling artifacts (see `make profile`)
+prof/
+*.prof
+*.test
+
 # IDE
 .idea/
 .vscode/
