@@ -9,15 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  # cgo (mattn/go-sqlite3) can't be cleanly cross-compiled, so build each OS on
-  # its native runner. ubuntu-latest -> linux/amd64, macos-latest -> darwin/arm64,
-  # windows-latest -> windows/amd64. Additional arches can be added with more
-  # runners (e.g. linux/arm64) later.
+  # cgo (mattn/go-sqlite3) can't be cleanly cross-compiled, so build each target
+  # on a native runner: ubuntu-latest -> linux/amd64, ubuntu-24.04-arm ->
+  # linux/arm64, macos-latest -> darwin/arm64, windows-latest -> windows/amd64.
+  # The archive name comes from `go env GOOS/GOARCH` on the runner, so adding an
+  # arch is just adding its runner here.
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       CGO_ENABLED: "1"
