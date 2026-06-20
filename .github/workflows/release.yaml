@@ -36,11 +36,34 @@ jobs:
           version: latest
           args: build --single-target --clean
 
-      - name: Upload binary
+      # Package on the native runner: GOOS/GOARCH are the host's here, so the
+      # archive name carries the real platform. (Uploading the bare binary and
+      # naming it downstream doesn't work — a single matched file is flattened to
+      # its parent on upload, dropping goreleaser's dist/<id>_<os>_<arch>/ dir.)
+      - name: Package archive (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin=$(find dist -type f -name dfetch | head -1)
+          [ -n "$bin" ] || { echo "no dfetch binary in dist/" >&2; exit 1; }
+          mkdir -p release
+          tar czf "release/dfetch_$(go env GOOS)_$(go env GOARCH).tar.gz" -C "$(dirname "$bin")" dfetch
+
+      - name: Package archive (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = Get-ChildItem -Recurse -Path dist -Filter dfetch.exe | Select-Object -First 1
+          if (-not $bin) { Write-Error "no dfetch.exe in dist/"; exit 1 }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path $bin.FullName -DestinationPath "release/dfetch_$(go env GOOS)_$(go env GOARCH).zip"
+
+      - name: Upload archive
         uses: actions/upload-artifact@v7
         with:
-          name: binary-${{ matrix.os }}
-          path: dist/**/dfetch*
+          name: archive-${{ matrix.os }}
+          path: release/*
           if-no-files-found: error
 
   publish:
@@ -51,21 +74,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Package archives and checksums
+      - name: Collect archives and checksums
         run: |
           set -euo pipefail
           mkdir -p release
-          # Each downloaded binary lives under artifacts/binary-<os>/<build-id>_<goos>_<goarch>.../dfetch[.exe]
-          while IFS= read -r bin; do
-            dir=$(dirname "$bin")
-            target=$(basename "$dir")            # e.g. dfetch_linux_amd64_v1
-            name=${target#dfetch_}               # e.g. linux_amd64_v1
-            if [[ "$bin" == *.exe ]]; then
-              zip -j "release/dfetch_${name}.zip" "$bin"
-            else
-              tar czf "release/dfetch_${name}.tar.gz" -C "$dir" "$(basename "$bin")"
-            fi
-          done < <(find artifacts -type f -name 'dfetch*')
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           cd release
           sha256sum * > checksums.txt
           ls -la
