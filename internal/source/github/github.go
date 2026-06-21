@@ -1,6 +1,7 @@
 // Package github is a dfetch Connector backed by the GitHub REST API. It exposes
-// the issues, pulls, and repos tables under the SQL schema "github" and pushes
-// down equality filters, ORDER BY, and LIMIT to the API where it can.
+// the issues, pulls, repos, commits, releases, and workflow_runs tables under the
+// SQL schema "github" and pushes down equality filters, ORDER BY, and LIMIT to the
+// API where it can.
 package github
 
 import (
@@ -67,6 +68,9 @@ func (c *Connector) Tables() []source.TableSchema {
 		{Name: "issues", Columns: issuesCols},
 		{Name: "pulls", Columns: pullsCols},
 		{Name: "repos", Columns: reposCols},
+		{Name: "commits", Columns: commitsCols},
+		{Name: "releases", Columns: releasesCols},
+		{Name: "workflow_runs", Columns: workflowRunsCols},
 	}
 }
 
@@ -79,6 +83,12 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 		return c.scanPulls(ctx, req, emit)
 	case "repos":
 		return c.scanRepos(ctx, req, emit)
+	case "commits":
+		return c.scanCommits(ctx, req, emit)
+	case "releases":
+		return c.scanReleases(ctx, req, emit)
+	case "workflow_runs":
+		return c.scanWorkflowRuns(ctx, req, emit)
 	default:
 		return fmt.Errorf("github: unknown table %q", req.Table)
 	}
