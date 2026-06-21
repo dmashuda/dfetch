@@ -98,6 +98,25 @@ func TestPlanScanNoLimitWithRightJoin(t *testing.T) {
 	assert.Nil(t, req.Limit)
 }
 
+// A NATURAL JOIN's equi-condition never lands in Join.On, so the planner can't
+// see it; its implicit INNER match can drop driving rows, so LIMIT must NOT push.
+func TestPlanScanNoLimitWithNaturalJoin(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a NATURAL JOIN s.b b
+		ORDER BY a.t DESC LIMIT 5`
+
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Nil(t, req.Limit)
+}
+
+// Same for a USING(...) join — the join columns aren't in Join.On either.
+func TestPlanScanNoLimitWithUsingJoin(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a JOIN s.b b USING (k)
+		ORDER BY a.t DESC LIMIT 5`
+
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Nil(t, req.Limit)
+}
+
 func TestPlanScanFiltersAndOrder(t *testing.T) {
 	req := planFor(t, "SELECT * FROM github.issues WHERE owner='golang' AND state='open' AND comments > 5 ORDER BY updated_at DESC LIMIT 10")
 

@@ -47,6 +47,9 @@ func TestRoundTrip(t *testing.T) {
 		"SELECT * FROM main.events AS e",
 		`SELECT * FROM "My Table"`,
 		"SELECT * FROM a JOIN (SELECT id FROM b) AS sub ON sub.id = a.id",
+		// Raw (table-valued function) source with an alias: the alias is embedded
+		// in Raw and must not be appended again ("... AS j AS j").
+		"SELECT * FROM json_each('[1,2]') AS j",
 
 		// join shapes
 		"SELECT * FROM a JOIN b ON a.id = b.id",

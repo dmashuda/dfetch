@@ -77,10 +77,19 @@ func limitSafeForJoin(stmt *sqlparse.Select, src sqlparse.Source) bool {
 			return false
 		}
 	}
-	// RIGHT/FULL joins can drop src rows or introduce NULL-extended rows.
 	for i := range stmt.Joins {
-		switch stmt.Joins[i].Type {
+		j := stmt.Joins[i]
+		// RIGHT/FULL joins can drop src rows or introduce NULL-extended rows.
+		switch j.Type {
 		case sqlparse.JoinRight, sqlparse.JoinFull:
+			return false
+		}
+		// NATURAL and USING joins carry an implicit equi-condition that never
+		// lands in Join.On, so the predicate analysis below can't see it and
+		// would wrongly treat the other source as pinned. An INNER NATURAL/USING
+		// join can drop src rows (no match ⇒ row gone), so pushing LIMIT could
+		// truncate src before the rows that would have survived the join.
+		if j.Natural || len(j.Using) > 0 {
 			return false
 		}
 	}

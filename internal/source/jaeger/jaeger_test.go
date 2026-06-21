@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
@@ -158,6 +159,35 @@ func TestScanSpansDefaultsTimeWindow(t *testing.T) {
 	// No start_time filter -> both bounds defaulted (last hour .. now).
 	assert.NotEmpty(t, gotQuery.Get("query.start_time_min"))
 	assert.NotEmpty(t, gotQuery.Get("query.start_time_max"))
+}
+
+// With only an upper bound on start_time, the default lower bound must anchor to
+// max (not now), or a historical query yields min > max — an inverted window
+// api_v3 returns nothing for.
+func TestScanSpansUpperBoundOnlyTimeWindow(t *testing.T) {
+	var gotQuery url.Values
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		_, _ = w.Write([]byte(`{"result":{"resourceSpans":[]}}`))
+	})
+
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "spans",
+		Filters: []source.Filter{
+			eqFilter("service_name", "dfetch"),
+			{Column: "start_time", Op: sqlparse.OpLt, Value: "2020-01-01T00:00:00Z"},
+		},
+	})
+	require.NoError(t, err)
+
+	max := gotQuery.Get("query.start_time_max")
+	min := gotQuery.Get("query.start_time_min")
+	assert.Equal(t, "2020-01-01T00:00:00Z", max)
+	tmin, err1 := time.Parse(time.RFC3339, min)
+	tmax, err2 := time.Parse(time.RFC3339, max)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
+	assert.True(t, tmin.Before(tmax), "min (%s) must be before max (%s), not an inverted window", min, max)
 }
 
 // A trace_id equality uses the by-ID endpoint and needs neither service_name nor

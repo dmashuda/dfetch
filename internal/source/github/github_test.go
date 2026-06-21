@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -253,6 +254,45 @@ func TestScanIssuesLimitStopsAcrossPages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{2, 1}, sizes) // page 2 trimmed to hit LIMIT 3 total
 	assert.Equal(t, 2, calls)           // stopped — did not fetch page 3
+}
+
+// A pushed LIMIT larger than maxPages*perPage must keep paging past the
+// maxPages safety cap (which only guards un-pushed scans) and deliver the full
+// LIMIT, not silently stop at 1000 rows.
+func TestScanIssuesLimitAboveMaxPages(t *testing.T) {
+	var page strings.Builder
+	page.WriteString("[")
+	for i := 0; i < 100; i++ {
+		if i > 0 {
+			page.WriteString(",")
+		}
+		page.WriteString(`{"number":1,"state":"open"}`)
+	}
+	page.WriteString("]")
+	body := page.String()
+
+	calls := 0
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		p := r.URL.Query().Get("page")
+		if p == "" {
+			p = "1"
+		}
+		n, _ := strconv.Atoi(p)
+		w.Header().Set("Link", `<`+"http://"+r.Host+r.URL.Path+`?page=`+strconv.Itoa(n+1)+`>; rel="next"`)
+		_, _ = w.Write([]byte(body))
+	})
+
+	limit := 1500 // > maxPages(10) * perPage(100)
+	rows, err := collectScan(c, source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+		OrderBy: []source.OrderTerm{{Column: "updated_at", Desc: true}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Len(t, rows.Rows, 1500) // full LIMIT delivered, not capped at 1000
+	assert.Equal(t, 15, calls)     // paged past the maxPages=10 cap
 }
 
 func TestLimitNotPushedWhenOrderUnmapped(t *testing.T) {
