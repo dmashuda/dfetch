@@ -91,6 +91,7 @@ from), `path`, and `author_login`; `workflow_runs` accepts `head_branch`,
 `event`, `status`, `actor_login`, and `head_sha`; `artifacts` accepts `name` and
 `workflow_run_id` (which fetches just that run's artifacts).
 
+<!-- BEGIN EXAMPLES github -->
 ```sh
 # issues for a repo, newest first
 dfetch query "SELECT number, title, state, comments
@@ -124,6 +125,7 @@ dfetch query "SELECT a.name, a.size_in_bytes, r.run_number, r.conclusion
               WHERE a.owner='dmashuda' AND a.repo='dfetch'
                 AND r.owner='dmashuda' AND r.repo='dfetch' LIMIT 10"
 ```
+<!-- END EXAMPLES github -->
 
 **Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate;
 unauthenticated requests work but are rate-limited to 60/hour.
@@ -146,6 +148,7 @@ its own traces.
 | `jaeger.services` | service names | — |
 | `jaeger.operations` | operations for a service | `service_name` |
 
+<!-- BEGIN EXAMPLES jaeger -->
 ```sh
 # slowest spans for a service in the last hour
 dfetch query "SELECT operation_name, duration_ms, status_code
@@ -165,6 +168,7 @@ dfetch query "SELECT operation_name,
               WHERE service_name='dfetch' AND status_code='error'
                 AND start_time >= '2026-06-01T00:00:00Z'"
 ```
+<!-- END EXAMPLES jaeger -->
 
 Notes:
 

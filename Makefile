@@ -18,7 +18,14 @@ BENCHTIME?=20x
 PROF?=mem
 PPROF_PORT?=8081
 
-.PHONY: build run test vet lint coverage generate install clean profile pprof
+# README query examples live in examples.yaml (single source of truth):
+#   make examples        regenerate the README example blocks from examples.yaml
+#   make examples-check  fail if the README has drifted (offline)
+#   make examples-test   run every example query against the live services
+EXAMPLES_YAML?=examples.yaml
+
+.PHONY: build run test vet lint coverage generate install clean profile pprof \
+        examples examples-check examples-test
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) .
@@ -67,6 +74,17 @@ profile:
 
 pprof:
 	go tool pprof -http=:$(PPROF_PORT) $(PROFILE_DIR)/engine.test $(PROFILE_DIR)/$(PROF).prof
+
+examples:
+	go run ./tools/examples -mode gen -yaml $(EXAMPLES_YAML) -readme README.md
+
+examples-check:
+	go run ./tools/examples -mode check -yaml $(EXAMPLES_YAML) -readme README.md
+
+# Runs every example query end-to-end; uses $$GITHUB_TOKEN or `gh auth token` for
+# GitHub, and skips the Jaeger group when no local Jaeger is reachable.
+examples-test: build
+	go run ./tools/examples -mode run -yaml $(EXAMPLES_YAML) -bin ./$(BUILD_DIR)/$(BINARY_NAME)
 
 clean:
 	rm -rf $(BUILD_DIR) coverage.out $(PROFILE_DIR)

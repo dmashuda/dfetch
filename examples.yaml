@@ -1,0 +1,76 @@
+# Source of truth for the runnable query examples in README.md.
+#
+# `make examples`       regenerates the README example blocks from this file.
+# `make examples-check` fails if the README has drifted from this file.
+# `make examples-test`  runs every query below against the live services.
+#
+# Each group maps to a <!-- BEGIN/END EXAMPLES <name> --> region in README.md.
+# A query is stored as raw SQL; the generator wraps it in `dfetch query "…"` and
+# shell-escapes it. Set `run: false` on an example that can't run as-is (e.g. it
+# contains a placeholder). `requires: jaeger` skips a group's queries in
+# `examples-test` when no local Jaeger is reachable.
+
+groups:
+  - name: github
+    examples:
+      - desc: issues for a repo, newest first
+        query: |
+          SELECT number, title, state, comments
+          FROM github.issues
+          WHERE owner='golang' AND repo='go' AND state='open'
+          ORDER BY updated_at DESC LIMIT 10
+
+      - desc: join pulls to their repo
+        query: |
+          SELECT p.number, p.title, r.full_name, r.stars
+          FROM github.pulls p
+          JOIN github.repos r ON r.owner=p.owner AND r.name=p.repo
+          WHERE p.owner='golang' AND p.repo='go' AND p.state='open'
+          ORDER BY p.created_at DESC LIMIT 20
+
+      - desc: did the latest CI on main pass?
+        query: |
+          SELECT run_number, name, status, conclusion, created_at
+          FROM github.workflow_runs
+          WHERE owner='dmashuda' AND repo='dfetch' AND head_branch='main'
+          ORDER BY created_at DESC LIMIT 5
+
+      - desc: recent commits touching one file
+        query: |
+          SELECT sha, author_login, message
+          FROM github.commits
+          WHERE owner='golang' AND repo='go' AND path='src/runtime/proc.go'
+          LIMIT 10
+
+      - desc: artifacts joined to the run that produced them
+        query: |
+          SELECT a.name, a.size_in_bytes, r.run_number, r.conclusion
+          FROM github.artifacts a
+          JOIN github.workflow_runs r ON r.id = a.workflow_run_id
+          WHERE a.owner='dmashuda' AND a.repo='dfetch'
+            AND r.owner='dmashuda' AND r.repo='dfetch' LIMIT 10
+
+  - name: jaeger
+    requires: jaeger
+    examples:
+      - desc: slowest spans for a service in the last hour
+        query: |
+          SELECT operation_name, duration_ms, status_code
+          FROM jaeger.spans
+          WHERE service_name='dfetch'
+          ORDER BY duration_ms DESC LIMIT 10
+
+      - desc: every span of one trace (no service_name or time window needed for a trace_id lookup)
+        run: false
+        query: |
+          SELECT span_id, parent_span_id, operation_name, service_name, duration_ms
+          FROM jaeger.spans WHERE trace_id='<TRACE_ID>'
+          ORDER BY start_time_unix_nano
+
+      - desc: error spans in a window, reading a span attribute out of the JSON column
+        query: |
+          SELECT operation_name,
+                 json_extract(attributes, '$."db.statement"') AS sql
+          FROM jaeger.spans
+          WHERE service_name='dfetch' AND status_code='error'
+            AND start_time >= '2026-06-01T00:00:00Z'

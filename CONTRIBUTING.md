@@ -52,6 +52,24 @@ make pprof            # memory profile  →  http://localhost:8081
 make pprof PROF=cpu   # CPU profile
 ```
 
+### README query examples
+
+The query examples in the README's GitHub and Jaeger connector sections are
+**generated** from [`examples.yaml`](examples.yaml) — don't edit those blocks by
+hand. Edit `examples.yaml` (each entry is a `desc` + raw-SQL `query`), then:
+
+```sh
+make examples        # regenerate the README blocks from examples.yaml
+make examples-check  # offline: fail if the README has drifted
+make examples-test   # run every example query against the live services
+```
+
+`make examples-test` uses `$GITHUB_TOKEN` (or `gh auth token`) for the GitHub
+queries and skips the Jaeger group when no local Jaeger is reachable; mark an
+example `run: false` if it can't run as-is (e.g. it contains a placeholder). The
+generator/runner live in [`tools/examples`](tools/examples) over the tested
+[`internal/examples`](internal/examples) package.
+
 ## Project layout
 
 ```
@@ -64,6 +82,8 @@ internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL re
 internal/localdb        per-request local SQLite database (attach/create/insert/query)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
+internal/examples       render/check README query examples from examples.yaml
+tools/examples          dev CLI: gen/check/run the examples (make examples*)
 ```
 
 ### How a query runs
