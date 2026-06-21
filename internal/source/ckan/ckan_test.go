@@ -173,6 +173,36 @@ func TestScanDatasetsEchoesSearchTermIntoQColumn(t *testing.T) {
 	assert.Equal(t, "climate", rows.Rows[0][18]) // q column echoes the search term
 }
 
+func TestScanDatasetsRejectsNonEqualityQ(t *testing.T) {
+	var called bool
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(searchResp(0, `[]`)))
+	})
+	// A non-equality operator on the virtual q column can't be honored (the
+	// column has no stored value), so it must error rather than silently
+	// returning zero rows.
+	_, err := collectScan(c, source.ScanRequest{
+		Table:   "datasets",
+		Filters: []source.Filter{{Column: "q", Op: sqlparse.OpLike, Value: "%climate%"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "q column supports only equality")
+	assert.False(t, called, "must not hit the API when the q filter is invalid")
+}
+
+func TestScanResourcesRejectsNonEqualityQ(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(searchResp(0, `[]`)))
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table:   "resources",
+		Filters: []source.Filter{{Column: "q", Op: sqlparse.OpIn, Values: []any{"a", "b"}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "q column supports only equality")
+}
+
 func TestScanDatasetsPushesDateRange(t *testing.T) {
 	var gotFq string
 	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {

@@ -3,8 +3,9 @@
 // other open-data portals, all sharing one read-only JSON API, so a single
 // connector pointed at a configurable base_url covers any of them; the default
 // host is data.gov's catalog. It is registered as the builtin schema "datagov"
-// and exposes the datasets table, pushing down the Solr-backed filters, ordering,
-// and LIMIT/OFFSET that package_search understands.
+// and exposes the datasets, resources, organizations, and groups tables, pushing
+// down the Solr-backed filters, ordering, and LIMIT/OFFSET that package_search
+// understands.
 package ckan
 
 import (
@@ -183,6 +184,28 @@ func apiMessage(body []byte) string {
 }
 
 // --- filter / order / push-down helpers ---
+
+// searchTerm extracts the full-text search value from a `q = '...'` filter. The
+// q column is a virtual search input — it has no stored value (it is only echoed
+// back for an equality filter), so any other operator on q would make SQLite's
+// verbatim re-filter compare against NULL and silently drop every row. Reject
+// such a filter with a clear error instead. Returns a nil value (and no error)
+// when there is no usable q filter. The returned value is `any` so it can be
+// written straight into the row's q column (the searched string, or nil).
+func searchTerm(req source.ScanRequest) (any, error) {
+	f, ok := req.Filter("q")
+	if !ok {
+		return nil, nil
+	}
+	if f.Op != sqlparse.OpEq {
+		return nil, fmt.Errorf("ckan.%s: the q column supports only equality (q = '...')", req.Table)
+	}
+	s, ok := f.Value.(string)
+	if !ok {
+		return nil, nil
+	}
+	return s, nil
+}
 
 // eqString returns the string value of an equality filter, if it is one.
 func eqString(f source.Filter) (string, bool) {

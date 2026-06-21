@@ -15,9 +15,11 @@ func col(name, typ string) source.Column { return source.Column{Name: name, Type
 
 // Column names mirror the CKAN package dict fields so queries read like the API
 // docs. "q" is a virtual full-text search column: WHERE q = '...' becomes the
-// package_search "q" parameter; it is not a returned field, so the value the
-// caller searched for is echoed back into the column (or NULL) to keep SQLite's
-// verbatim re-filter from dropping the row.
+// package_search "q" parameter. It is not a returned field, so the value the
+// caller searched for is echoed back into the column (NULL when absent) to keep
+// SQLite's verbatim re-filter from dropping the row. Only equality is supported
+// (see searchTerm): any other operator on q is rejected, since the column has no
+// stored value for SQLite to compare against.
 var datasetsCols = []source.Column{
 	col("id", "TEXT"), col("name", "TEXT"), col("title", "TEXT"),
 	col("notes", "TEXT"), col("author", "TEXT"), col("maintainer", "TEXT"),
@@ -152,8 +154,15 @@ func tagNames(tags []ckanTag) string {
 // --- datasets ---
 
 func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	searchQ, err := searchTerm(req)
+	if err != nil {
+		return err
+	}
 	q := url.Values{}
-	searchQ, sortOK, consumed := buildDatasetParams(req, q)
+	if s, ok := searchQ.(string); ok {
+		q.Set("q", s)
+	}
+	sortOK, consumed := buildDatasetParams(req, q)
 	rows, stopAt, pushLimit := pageLimit(req, sortOK && consumed)
 
 	cols := colNames(datasetsCols)
@@ -208,23 +217,20 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 	return nil
 }
 
-// buildDatasetParams translates the pushable parts of req into package_search
-// query parameters on q, and reports the searched-for value (for the "q"
-// column), whether the ORDER BY was fully honored, and whether every filter was
-// consumed by the API. The last two together decide whether LIMIT is safe to
-// push: an unconsumed filter or unhonored order means the API result is not the
-// exact filtered/ordered set.
-func buildDatasetParams(req source.ScanRequest, q url.Values) (searchQ any, sortOK, consumed bool) {
+// buildDatasetParams translates the pushable filters and ORDER BY of req into
+// package_search query parameters on q, and reports whether the ORDER BY was
+// fully honored and whether every filter was consumed by the API. The two
+// together decide whether LIMIT is safe to push: an unconsumed filter or
+// unhonored order means the API result is not the exact filtered/ordered set.
+// The full-text "q" filter is handled separately by searchTerm (and is already
+// set on q by the caller), so here it just counts as consumed.
+func buildDatasetParams(req source.ScanRequest, q url.Values) (sortOK, consumed bool) {
 	consumed = true
 	var fq []string
 	for _, f := range req.Filters {
 		switch f.Column {
 		case "q":
-			if s, ok := eqString(f); ok {
-				q.Set("q", s)
-				searchQ = s
-				continue
-			}
+			continue // applied by searchTerm; an equality q is consumed
 		case "organization", "license_id", "state", "name", "tags":
 			if s, ok := eqString(f); ok {
 				fq = append(fq, f.Column+":"+solrQuote(s))
@@ -249,7 +255,7 @@ func buildDatasetParams(req source.ScanRequest, q url.Values) (searchQ any, sort
 	if sort != "" {
 		q.Set("sort", sort)
 	}
-	return searchQ, sortOK, consumed
+	return sortOK, consumed
 }
 
 // --- resources ---
@@ -261,13 +267,13 @@ func buildDatasetParams(req source.ScanRequest, q url.Values) (searchQ any, sort
 // yields many resources, so a dataset-page LIMIT is not a resource LIMIT); the
 // scan is bounded by maxPages instead.
 func (c *Connector) scanResources(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	searchQ, err := searchTerm(req)
+	if err != nil {
+		return err
+	}
 	q := url.Values{}
-	var searchQ any
-	if f, ok := req.Filter("q"); ok {
-		if s, ok := eqString(f); ok {
-			q.Set("q", s)
-			searchQ = s
-		}
+	if s, ok := searchQ.(string); ok {
+		q.Set("q", s)
 	}
 	cols := colNames(resourcesCols)
 
