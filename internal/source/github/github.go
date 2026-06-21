@@ -1,6 +1,7 @@
 // Package github is a dfetch Connector backed by the GitHub REST API. It exposes
-// the issues, pulls, and repos tables under the SQL schema "github" and pushes
-// down equality filters, ORDER BY, and LIMIT to the API where it can.
+// the issues, pulls, repos, commits, releases, workflow_runs, and artifacts tables
+// under the SQL schema "github" and pushes down equality filters, ORDER BY, and
+// LIMIT to the API where it can.
 package github
 
 import (
@@ -67,6 +68,10 @@ func (c *Connector) Tables() []source.TableSchema {
 		{Name: "issues", Columns: issuesCols},
 		{Name: "pulls", Columns: pullsCols},
 		{Name: "repos", Columns: reposCols},
+		{Name: "commits", Columns: commitsCols},
+		{Name: "releases", Columns: releasesCols},
+		{Name: "workflow_runs", Columns: workflowRunsCols},
+		{Name: "artifacts", Columns: artifactsCols},
 	}
 }
 
@@ -79,6 +84,14 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 		return c.scanPulls(ctx, req, emit)
 	case "repos":
 		return c.scanRepos(ctx, req, emit)
+	case "commits":
+		return c.scanCommits(ctx, req, emit)
+	case "releases":
+		return c.scanReleases(ctx, req, emit)
+	case "workflow_runs":
+		return c.scanWorkflowRuns(ctx, req, emit)
+	case "artifacts":
+		return c.scanArtifacts(ctx, req, emit)
 	default:
 		return fmt.Errorf("github: unknown table %q", req.Table)
 	}
@@ -160,6 +173,17 @@ func stringEq(req source.ScanRequest, col string) (string, bool) {
 	}
 	s, ok := f.Value.(string)
 	return s, ok
+}
+
+// intEq returns the int64 value of an equality filter on col, if present. Numeric
+// literals arrive as int64 from the planner.
+func intEq(req source.ScanRequest, col string) (int64, bool) {
+	f, ok := req.Filter(col)
+	if !ok || f.Op != sqlparse.OpEq {
+		return 0, false
+	}
+	n, ok := f.Value.(int64)
+	return n, ok
 }
 
 // requireStringEq is stringEq but returns a helpful error when the filter is

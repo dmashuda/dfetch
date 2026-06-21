@@ -78,10 +78,18 @@ Backed by the GitHub REST API.
 | `github.issues` | issues for a repo | `owner`, `repo` |
 | `github.pulls` | pull requests for a repo | `owner`, `repo` |
 | `github.repos` | a repo, or an owner's repos | `owner` |
+| `github.commits` | commit history for a repo | `owner`, `repo` |
+| `github.releases` | releases for a repo | `owner`, `repo` |
+| `github.workflow_runs` | GitHub Actions runs for a repo | `owner`, `repo` |
+| `github.artifacts` | GitHub Actions artifacts for a repo | `owner`, `repo` |
 
 Column names mirror the GitHub API JSON fields (`created_at`, `updated_at`,
 `user_login`, …). The required filters are API path parameters, so a query
-without them errors before any request is made.
+without them errors before any request is made. Beyond the required ones, several
+columns push down to the API: `commits` accepts `sha` (a branch/ref to start
+from), `path`, and `author_login`; `workflow_runs` accepts `head_branch`,
+`event`, `status`, `actor_login`, and `head_sha`; `artifacts` accepts `name` and
+`workflow_run_id` (which fetches just that run's artifacts).
 
 ```sh
 # issues for a repo, newest first
@@ -96,6 +104,25 @@ dfetch query "SELECT p.number, p.title, r.full_name, r.stars
               JOIN github.repos r ON r.owner=p.owner AND r.name=p.repo
               WHERE p.owner='golang' AND p.repo='go' AND p.state='open'
               ORDER BY p.created_at DESC LIMIT 20"
+
+# did the latest CI on main pass?
+dfetch query "SELECT run_number, name, status, conclusion, created_at
+              FROM github.workflow_runs
+              WHERE owner='dmashuda' AND repo='dfetch' AND head_branch='main'
+              ORDER BY created_at DESC LIMIT 5"
+
+# recent commits touching one file
+dfetch query "SELECT sha, author_login, message
+              FROM github.commits
+              WHERE owner='golang' AND repo='go' AND path='src/runtime/proc.go'
+              LIMIT 10"
+
+# artifacts joined to the run that produced them
+dfetch query "SELECT a.name, a.size_in_bytes, r.run_number, r.conclusion
+              FROM github.artifacts a
+              JOIN github.workflow_runs r ON r.id = a.workflow_run_id
+              WHERE a.owner='dmashuda' AND a.repo='dfetch'
+                AND r.owner='dmashuda' AND r.repo='dfetch' LIMIT 10"
 ```
 
 **Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate;

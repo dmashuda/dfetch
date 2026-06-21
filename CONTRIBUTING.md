@@ -58,7 +58,7 @@ make pprof PROF=cpu   # CPU profile
 cmd/                    cobra CLI: root, query, tables, version
 internal/config         YAML config loading (schema -> connector)
 internal/source         Connector interface + ScanRequest (push-down) + registry
-internal/source/github  GitHub connector (issues, pulls, repos)
+internal/source/github  GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
 internal/source/jaeger  Jaeger connector (spans, services, operations)
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)
