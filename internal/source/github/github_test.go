@@ -336,13 +336,29 @@ func TestScanCommits(t *testing.T) {
 	assert.Equal(t, colNames(commitsCols), rows.Columns)
 	require.Len(t, rows.Rows, 1)
 	row := rows.Rows[0]
-	assert.Equal(t, "golang", row[0])  // owner
-	assert.Equal(t, "go", row[1])      // repo
-	assert.Equal(t, "abc", row[2])     // sha
-	assert.Equal(t, "fix bug", row[3]) // message
-	assert.Equal(t, "alice", row[4])   // author_login
-	assert.Equal(t, "Alice", row[5])   // author_name
-	assert.Equal(t, "bob", row[8])     // committer_login
+	assert.Equal(t, "golang", row[0])   // owner
+	assert.Equal(t, "go", row[1])       // repo
+	assert.Equal(t, "src/x.go", row[2]) // path (echoed from the filter)
+	assert.Equal(t, "abc", row[3])      // sha
+	assert.Equal(t, "fix bug", row[4])  // message
+	assert.Equal(t, "alice", row[5])    // author_login
+	assert.Equal(t, "Alice", row[6])    // author_name
+	assert.Equal(t, "bob", row[9])      // committer_login
+}
+
+// path is filter-only on the API; when no path filter is given the synthetic
+// column is NULL rather than erroring.
+func TestScanCommitsPathNullWhenUnfiltered(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"sha":"abc","commit":{"message":"x"}}]`))
+	})
+	rows, err := collectScan(c, source.ScanRequest{
+		Table:   "commits",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+	})
+	require.NoError(t, err)
+	require.Len(t, rows.Rows, 1)
+	assert.Nil(t, rows.Rows[0][2]) // path null when unfiltered
 }
 
 // sha is a start-ref, not an exact match, so its presence must NOT push LIMIT

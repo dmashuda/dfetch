@@ -39,7 +39,7 @@ var reposCols = []source.Column{
 }
 
 var commitsCols = []source.Column{
-	col("owner", "TEXT"), col("repo", "TEXT"), col("sha", "TEXT"),
+	col("owner", "TEXT"), col("repo", "TEXT"), col("path", "TEXT"), col("sha", "TEXT"),
 	col("message", "TEXT"), col("author_login", "TEXT"), col("author_name", "TEXT"),
 	col("author_email", "TEXT"), col("author_date", "TEXT"),
 	col("committer_login", "TEXT"), col("committer_name", "TEXT"),
@@ -437,8 +437,14 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 	if sha, ok := stringEq(req, "sha"); ok {
 		q.Set("sha", sha)
 	}
+	// path is a filter-only API param: a commit touches many files, so the
+	// response carries no single path. Echo the filtered value into the synthetic
+	// "path" column (like owner/repo) so the engine's verbatim WHERE path = '…'
+	// still matches; it's NULL when unfiltered.
+	var pathVal any
 	if path, ok := stringEq(req, "path"); ok {
 		q.Set("path", path)
+		pathVal = path
 	}
 	if author, ok := stringEq(req, "author_login"); ok {
 		q.Set("author", author)
@@ -459,7 +465,7 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 		}
 		page := make([][]any, 0, len(items))
 		for _, it := range items {
-			page = append(page, commitRow(owner, repo, it))
+			page = append(page, commitRow(owner, repo, pathVal, it))
 			sent++
 			if pushLimit && sent >= stopAt {
 				break
@@ -477,7 +483,7 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 	return nil
 }
 
-func commitRow(owner, repo string, c ghCommit) []any {
+func commitRow(owner, repo string, path any, c ghCommit) []any {
 	var authorName, authorEmail, authorDate, committerName, committerDate any
 	if a := c.Commit.Author; a != nil {
 		authorName, authorEmail, authorDate = a.Name, a.Email, a.Date
@@ -486,7 +492,7 @@ func commitRow(owner, repo string, c ghCommit) []any {
 		committerName, committerDate = cm.Name, cm.Date
 	}
 	return []any{
-		owner, repo, c.SHA, c.Commit.Message, login(c.Author), authorName, authorEmail,
+		owner, repo, path, c.SHA, c.Commit.Message, login(c.Author), authorName, authorEmail,
 		authorDate, login(c.Committer), committerName, committerDate, c.HTMLURL,
 	}
 }
