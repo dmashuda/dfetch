@@ -254,7 +254,7 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/issues?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghIssue
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -316,7 +316,7 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest, emit 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/pulls?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghPull
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -381,7 +381,7 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest, emit 
 	start := c.baseURL + "/users/" + escapePath(owner) + "/repos?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghRepo
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -457,7 +457,7 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/commits?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghCommit
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -517,7 +517,7 @@ func (c *Connector) scanReleases(ctx context.Context, req source.ScanRequest, em
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/releases?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghRelease
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -582,7 +582,7 @@ func (c *Connector) scanWorkflowRuns(ctx context.Context, req source.ScanRequest
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/actions/runs?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var resp ghRunsResponse
 		next, err = c.getJSON(ctx, next, &resp)
 		if err != nil {
@@ -643,7 +643,7 @@ func (c *Connector) scanArtifacts(ctx context.Context, req source.ScanRequest, e
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + path + "?" + q.Encode()
 
 	sent := 0
-	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var resp ghArtifactsResponse
 		next, err = c.getJSON(ctx, next, &resp)
 		if err != nil {

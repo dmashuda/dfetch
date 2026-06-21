@@ -174,6 +174,7 @@ func requireStringEq(req source.ScanRequest, col string) (string, error) {
 // unparseable literal is ignored (SQLite re-applies the predicate anyway).
 func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (min, max time.Time) {
 	min, max = now.Add(-window), now
+	var minSet, maxSet bool
 	for _, f := range req.Filters {
 		if f.Column != "start_time" {
 			continue
@@ -181,22 +182,28 @@ func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (mi
 		switch f.Op {
 		case sqlparse.OpGt, sqlparse.OpGte:
 			if t, ok := parseTime(f.Value); ok {
-				min = t
+				min, minSet = t, true
 			}
 		case sqlparse.OpLt, sqlparse.OpLte:
 			if t, ok := parseTime(f.Value); ok {
-				max = t
+				max, maxSet = t, true
 			}
 		case sqlparse.OpBetween:
 			if len(f.Values) == 2 {
 				if t, ok := parseTime(f.Values[0]); ok {
-					min = t
+					min, minSet = t, true
 				}
 				if t, ok := parseTime(f.Values[1]); ok {
-					max = t
+					max, maxSet = t, true
 				}
 			}
 		}
+	}
+	// With only an upper bound, anchor the default window to max rather than to
+	// now: otherwise a historical max leaves min (now-window) > max, an inverted
+	// window that api_v3 returns nothing for, dropping rows the query wanted.
+	if maxSet && !minSet {
+		min = max.Add(-window)
 	}
 	return min, max
 }

@@ -162,7 +162,10 @@ func (s Source) sql() string {
 			base = quoteIdent(s.Schema) + "." + base
 		}
 	default:
-		base = s.Raw
+		// Raw is the verbatim source text (table-valued function or
+		// parenthesized join) and already includes any alias, so appending
+		// s.Alias again would double it ("json_each(...) AS j AS j").
+		return s.Raw
 	}
 	if s.Alias != "" {
 		base += " AS " + quoteIdent(s.Alias)
