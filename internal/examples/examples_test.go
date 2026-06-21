@@ -74,5 +74,5 @@ func TestLoadRepoExamples(t *testing.T) {
 		names = append(names, g.Name)
 		assert.NotEmpty(t, g.Examples, "group %s has examples", g.Name)
 	}
-	assert.Equal(t, []string{"github", "jaeger"}, names)
+	assert.Equal(t, []string{"github", "jaeger", "datagov"}, names)
 }

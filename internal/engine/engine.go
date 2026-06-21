@@ -12,6 +12,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/config"
 	"github.com/dmashuda/dfetch/internal/localdb"
 	"github.com/dmashuda/dfetch/internal/source"
+	"github.com/dmashuda/dfetch/internal/source/ckan"
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/source/jaeger"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
@@ -32,8 +33,9 @@ type Engine struct {
 // builtins are connector types that are available without configuration. Each
 // is also registered under its own name as a schema.
 var builtins = map[string]source.Factory{
-	"github": github.New,
-	"jaeger": jaeger.New,
+	"datagov": ckan.New,
+	"github":  github.New,
+	"jaeger":  jaeger.New,
 }
 
 // New builds an Engine: the built-in connectors plus any declared in config.

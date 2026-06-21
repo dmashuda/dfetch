@@ -65,7 +65,7 @@ superset of the rows.
 
 ## Connectors
 
-Two connectors are built in and need no configuration. To point one at a
+Three connectors are built in and need no configuration. To point one at a
 non-default host (e.g. an enterprise or remote instance), or to register the same
 connector under several schemas, see [Configuration](#configuration).
 
@@ -181,6 +181,63 @@ Notes:
   (`internal`/`server`/`client`/…, `unset`/`ok`/`error`); `attributes` is the
   span's attribute list as a JSON object, queryable with SQLite's `json_extract`.
 - Set `JAEGER_TOKEN` for a bearer-authenticated deployment.
+
+### data.gov / CKAN — schema `datagov`
+
+Queries [data.gov](https://data.gov)'s open-data catalog through its
+[CKAN Action API](https://docs.ckan.org/en/latest/api/) and serves the catalog
+metadata as tables. CKAN powers hundreds of government and research portals, so
+the same connector works against any of them via a `base_url` override (see
+[Configuration](#configuration)).
+
+| table | rows | required filters |
+| --- | --- | --- |
+| `datagov.datasets` | datasets (packages) in the catalog | — |
+| `datagov.resources` | the downloadable files within datasets | — |
+| `datagov.organizations` | publishing organizations | — |
+| `datagov.groups` | dataset groups | — |
+
+<!-- BEGIN EXAMPLES datagov -->
+```sh
+# full-text search the catalog, most recently updated first
+dfetch query "SELECT name, organization, num_resources
+              FROM datagov.datasets
+              WHERE q='climate' ORDER BY metadata_modified DESC LIMIT 10"
+
+# datasets from one organization (pushed down as a Solr fq)
+dfetch query "SELECT name, metadata_modified
+              FROM datagov.datasets
+              WHERE organization='noaa-gov'
+              ORDER BY metadata_modified DESC LIMIT 10"
+
+# CSV resources of datasets matching a topic
+dfetch query "SELECT package_name, name, url
+              FROM datagov.resources
+              WHERE q='wildfire' AND format='CSV' LIMIT 10"
+
+# organizations with the most datasets
+dfetch query "SELECT name, title, package_count
+              FROM datagov.organizations
+              ORDER BY package_count DESC LIMIT 10"
+```
+<!-- END EXAMPLES datagov -->
+
+Notes:
+
+- `datasets` and `resources` share a virtual `q` column for full-text search:
+  `WHERE q = 'climate'` becomes the CKAN `q` parameter. It is a search input, not
+  a stored field.
+- Push-down on `datasets` covers equality/`IN` on `organization`, `license_id`,
+  `state`, `name`, and `tags` (CKAN Solr `fq`), a `metadata_created` /
+  `metadata_modified` range → a Solr date range, `ORDER BY` on
+  `metadata_modified` / `metadata_created` / `title`, and `LIMIT`/`OFFSET`. Other
+  predicates are re-applied locally by SQLite.
+- No required filters, but an unfiltered scan is capped (it won't page through the
+  whole catalog); add a `q`/`WHERE`/`LIMIT` to narrow it.
+- No API key is needed. data.gov has moved its primary endpoint behind the GSA
+  `api.gsa.gov` gateway; the default `base_url` (`catalog-old.data.gov`) still
+  serves the standard API. To use the gateway, set `base_url`,
+  `action_path: /v3/action`, and an `api_key` (e.g. `DEMO_KEY`) in config.
 
 ## Configuration
 

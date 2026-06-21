@@ -74,3 +74,30 @@ groups:
           FROM jaeger.spans
           WHERE service_name='dfetch' AND status_code='error'
             AND start_time >= '2026-06-01T00:00:00Z'
+
+  - name: datagov
+    examples:
+      - desc: full-text search the catalog, most recently updated first
+        query: |
+          SELECT name, organization, num_resources
+          FROM datagov.datasets
+          WHERE q='climate' ORDER BY metadata_modified DESC LIMIT 10
+
+      - desc: datasets from one organization (pushed down as a Solr fq)
+        query: |
+          SELECT name, metadata_modified
+          FROM datagov.datasets
+          WHERE organization='noaa-gov'
+          ORDER BY metadata_modified DESC LIMIT 10
+
+      - desc: CSV resources of datasets matching a topic
+        query: |
+          SELECT package_name, name, url
+          FROM datagov.resources
+          WHERE q='wildfire' AND format='CSV' LIMIT 10
+
+      - desc: organizations with the most datasets
+        query: |
+          SELECT name, title, package_count
+          FROM datagov.organizations
+          ORDER BY package_count DESC LIMIT 10
