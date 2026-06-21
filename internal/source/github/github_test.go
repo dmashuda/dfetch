@@ -131,7 +131,7 @@ func TestTables(t *testing.T) {
 		names = append(names, tbl.Name)
 		assert.NotEmpty(t, tbl.Columns)
 	}
-	assert.ElementsMatch(t, []string{"issues", "pulls", "repos", "commits", "releases", "workflow_runs"}, names)
+	assert.ElementsMatch(t, []string{"issues", "pulls", "repos", "commits", "releases", "workflow_runs", "artifacts"}, names)
 }
 
 func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
@@ -455,6 +455,74 @@ func TestScanWorkflowRunsNullConclusion(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows.Rows, 1)
 	assert.Nil(t, rows.Rows[0][9]) // conclusion null
+}
+
+func TestScanArtifacts(t *testing.T) {
+	var gotPath, gotQuery string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"total_count":1,"artifacts":[
+			{"id":11,"name":"dfetch_linux_amd64","size_in_bytes":556,"expired":false,
+			 "created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:01:00Z",
+			 "expires_at":null,"digest":"sha256:abc",
+			 "archive_download_url":"http://gh/dl/11",
+			 "workflow_run":{"id":42,"head_branch":"main","head_sha":"deadbeef"}}
+		]}`))
+	})
+
+	rows, err := collectScan(c, source.ScanRequest{
+		Table: "artifacts",
+		Filters: []source.Filter{
+			eqFilter("owner", "o"), eqFilter("repo", "r"), eqFilter("name", "dfetch_linux_amd64"),
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "/repos/o/r/actions/artifacts", gotPath)
+	assert.Contains(t, gotQuery, "name=dfetch_linux_amd64")
+
+	assert.Equal(t, colNames(artifactsCols), rows.Columns)
+	require.Len(t, rows.Rows, 1)
+	row := rows.Rows[0]
+	assert.Equal(t, int64(11), row[2])   // id
+	assert.Equal(t, int64(556), row[4])  // size_in_bytes
+	assert.Equal(t, false, row[5])       // expired
+	assert.Nil(t, row[8])                // expires_at null
+	assert.Equal(t, int64(42), row[10])  // workflow_run_id hoisted
+	assert.Equal(t, "main", row[11])     // head_branch hoisted
+	assert.Equal(t, "deadbeef", row[12]) // head_sha hoisted
+}
+
+// A workflow_run_id filter selects one run's artifacts via the run-scoped endpoint.
+func TestScanArtifactsByRun(t *testing.T) {
+	var gotPath string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":1,"name":"a"}]}`))
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "artifacts",
+		Filters: []source.Filter{
+			eqFilter("owner", "o"), eqFilter("repo", "r"),
+			{Column: "workflow_run_id", Op: sqlparse.OpEq, Value: int64(42)},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/repos/o/r/actions/runs/42/artifacts", gotPath)
+}
+
+func TestScanArtifactsRequiresOwnerRepo(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("should not call the API without owner/repo")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table:   "artifacts",
+		Filters: []source.Filter{eqFilter("owner", "o")}, // missing repo
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repo")
 }
 
 func TestAPIError(t *testing.T) {

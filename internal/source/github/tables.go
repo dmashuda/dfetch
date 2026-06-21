@@ -62,6 +62,14 @@ var workflowRunsCols = []source.Column{
 	col("html_url", "TEXT"),
 }
 
+var artifactsCols = []source.Column{
+	col("owner", "TEXT"), col("repo", "TEXT"), col("id", "INTEGER"),
+	col("name", "TEXT"), col("size_in_bytes", "INTEGER"), col("expired", "INTEGER"),
+	col("created_at", "TEXT"), col("updated_at", "TEXT"), col("expires_at", "TEXT"),
+	col("digest", "TEXT"), col("workflow_run_id", "INTEGER"), col("head_branch", "TEXT"),
+	col("head_sha", "TEXT"), col("archive_download_url", "TEXT"),
+}
+
 // --- JSON shapes ---
 
 type ghUser struct {
@@ -169,6 +177,28 @@ type ghRun struct {
 // the actions/runs endpoint wraps the list in an object (unlike issues/pulls).
 type ghRunsResponse struct {
 	WorkflowRuns []ghRun `json:"workflow_runs"`
+}
+
+type ghArtifact struct {
+	ID                 int64   `json:"id"`
+	Name               string  `json:"name"`
+	SizeInBytes        int64   `json:"size_in_bytes"`
+	Expired            bool    `json:"expired"`
+	CreatedAt          *string `json:"created_at"`
+	UpdatedAt          *string `json:"updated_at"`
+	ExpiresAt          *string `json:"expires_at"`
+	Digest             *string `json:"digest"`
+	ArchiveDownloadURL string  `json:"archive_download_url"`
+	WorkflowRun        *struct {
+		ID         int64  `json:"id"`
+		HeadBranch string `json:"head_branch"`
+		HeadSHA    string `json:"head_sha"`
+	} `json:"workflow_run"`
+}
+
+// the actions/artifacts endpoints wrap the list in an object, like runs.
+type ghArtifactsResponse struct {
+	Artifacts []ghArtifact `json:"artifacts"`
 }
 
 // --- helpers ---
@@ -574,6 +604,75 @@ func (c *Connector) scanWorkflowRuns(ctx context.Context, req source.ScanRequest
 		}
 	}
 	return nil
+}
+
+// --- artifacts ---
+
+func (c *Connector) scanArtifacts(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	owner, err := requireStringEq(req, "owner")
+	if err != nil {
+		return err
+	}
+	repo, err := requireStringEq(req, "repo")
+	if err != nil {
+		return err
+	}
+
+	// A workflow_run_id filter selects one run's artifacts via the run-scoped
+	// endpoint; otherwise list the whole repo's. Both honor an exact name filter.
+	path := "/actions/artifacts"
+	if runID, ok := intEq(req, "workflow_run_id"); ok {
+		path = "/actions/runs/" + strconv.FormatInt(runID, 10) + "/artifacts"
+	}
+
+	q := url.Values{}
+	if name, ok := stringEq(req, "name"); ok {
+		q.Set("name", name)
+	}
+	// No sort param mapped (results are newest-first), so an ORDER BY can't be honored.
+	perPage, stopAt, pushLimit := pageLimit(req, limitSafe(req, false,
+		"owner", "repo", "name", "workflow_run_id"))
+	q.Set("per_page", strconv.Itoa(perPage))
+
+	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + path + "?" + q.Encode()
+
+	sent := 0
+	for next, pages := start, 0; next != "" && pages < maxPages; pages++ {
+		var resp ghArtifactsResponse
+		next, err = c.getJSON(ctx, next, &resp)
+		if err != nil {
+			return err
+		}
+		page := make([][]any, 0, len(resp.Artifacts))
+		for _, it := range resp.Artifacts {
+			page = append(page, artifactRow(owner, repo, it))
+			sent++
+			if pushLimit && sent >= stopAt {
+				break
+			}
+		}
+		if len(page) > 0 {
+			if err := emit(&source.Rows{Columns: colNames(artifactsCols), Rows: page}); err != nil {
+				return err
+			}
+		}
+		if pushLimit && sent >= stopAt {
+			return nil
+		}
+	}
+	return nil
+}
+
+func artifactRow(owner, repo string, a ghArtifact) []any {
+	var runID, headBranch, headSHA any
+	if r := a.WorkflowRun; r != nil {
+		runID, headBranch, headSHA = r.ID, r.HeadBranch, r.HeadSHA
+	}
+	return []any{
+		owner, repo, a.ID, a.Name, a.SizeInBytes, a.Expired,
+		nullable(a.CreatedAt), nullable(a.UpdatedAt), nullable(a.ExpiresAt), nullable(a.Digest),
+		runID, headBranch, headSHA, a.ArchiveDownloadURL,
+	}
 }
 
 func colNames(cols []source.Column) []string {
