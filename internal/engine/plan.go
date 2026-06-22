@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"sort"
+
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
@@ -50,7 +52,90 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 			req.Offset = &n
 		}
 	}
+
+	req.Columns = neededColumns(stmt, src, cols, single)
 	return req
+}
+
+// neededColumns returns the columns of src referenced anywhere in the query, so a
+// projection-aware source can SELECT only those instead of every column. Unlike
+// filter push-down, under-projection is a correctness bug — a missing column would
+// leave SQLite unable to re-apply WHERE/ORDER over absent data — so this returns
+// nil ("all columns", the safe default) whenever the complete set can't be proven.
+func neededColumns(stmt *sqlparse.Select, src sqlparse.Source, cols map[string]bool, single bool) []string {
+	if !stmt.Complete {
+		return nil // unmodeled GROUP BY/HAVING/CTE may reference columns we can't see
+	}
+
+	need := map[string]bool{}
+	ambiguous := false
+	mark := func(table, column string) {
+		switch {
+		case column == "":
+			return
+		case attributable(table, src, single):
+			if cols[column] {
+				need[column] = true
+			}
+		case table == "" && !single && cols[column]:
+			// unqualified column in a multi-source query that exists in src: it
+			// might belong to src, so we can't safely narrow.
+			ambiguous = true
+		}
+	}
+	markPredicates := func(ps []sqlparse.Predicate) bool {
+		for i := range ps {
+			p := &ps[i]
+			if p.Op == sqlparse.OpNone {
+				return false // raw/unmodeled conjunct — its column refs are invisible
+			}
+			mark(p.Table, p.Column)
+			if p.RefColumn != "" {
+				mark(p.RefTable, p.RefColumn)
+			}
+		}
+		return true
+	}
+
+	for _, p := range stmt.Projections {
+		switch {
+		case p.Star && (p.Table == "" || attributable(p.Table, src, single)):
+			// An unqualified "*" expands to every source (including src), and
+			// "src.*" to all of src — either way src needs all columns. (A
+			// different source's "other.*" falls through to the next case.)
+			return nil
+		case p.Star:
+			continue // a different source's star — does not force src to all columns
+		case p.Expr != "":
+			return nil // expression/aggregate projection may reference src columns
+		default:
+			mark(p.Table, p.Column)
+		}
+	}
+	if !markPredicates(stmt.Where) {
+		return nil
+	}
+	for i := range stmt.Joins {
+		if !markPredicates(stmt.Joins[i].On) {
+			return nil
+		}
+	}
+	for _, o := range stmt.OrderBy {
+		if o.Column == "" {
+			return nil // expression ordering may reference src columns
+		}
+		mark(o.Table, o.Column)
+	}
+
+	if ambiguous || len(need) == 0 {
+		return nil // ambiguous attribution, or src has no column refs (e.g. SELECT 1)
+	}
+	out := make([]string, 0, len(need))
+	for c := range need {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // limitSafeForJoin reports whether LIMIT/OFFSET may be pushed to src in a

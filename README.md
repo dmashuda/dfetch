@@ -239,6 +239,41 @@ Notes:
   serves the standard API. To use the gateway, set `base_url`,
   `action_path: /v3/action`, and an `api_key` (e.g. `DEMO_KEY`) in config.
 
+### PostgreSQL — connector type `postgres`
+
+A configured connector (no default — it needs a DSN). Each source maps **one
+Postgres schema** and discovers its tables on demand from `information_schema`, so
+`dfetch tables` browses them lazily rather than listing the whole catalog. It
+pushes a real `SELECT` to the server.
+
+```yaml
+sources:
+  - name: warehouse           # queried as warehouse.<table>
+    type: postgres
+    params:
+      schema: public          # the Postgres schema (default: public)
+      # dsn: postgres://…      # optional; overrides the env DSN
+      # max_rows: 100000       # cap on a scan whose LIMIT can't be pushed
+```
+
+The DSN comes from `$DFETCH_POSTGRES_DSN` (or `$DATABASE_URL`), or a `dsn` param.
+To expose more than one Postgres schema, register more sources (e.g. a second
+`analytics` source with `schema: analytics`).
+
+```sh
+DFETCH_POSTGRES_DSN='postgres://user:pass@host:5432/db?sslmode=disable' \
+  dfetch query "SELECT id, total FROM warehouse.orders
+                WHERE status='paid' ORDER BY created_at DESC LIMIT 20"
+```
+
+Push-down: the query's referenced columns become the `SELECT` list (only those, not
+`*`); equality / `<>` / `<` / `<=` / `>` / `>=` / `IN` / `BETWEEN` filters become a
+parameterized `WHERE`; and `ORDER BY` + `LIMIT` are pushed when the order keys are
+numeric/temporal (so Postgres and SQLite order identically). `LIKE` and other
+predicates are evaluated locally by SQLite. A scan whose `LIMIT` can't be pushed is
+capped at `max_rows`. Column types map to SQLite affinities (`numeric` → `REAL`,
+which can lose precision on very large exact values).
+
 ## Configuration
 
 dfetch works with no config. To point a connector at a non-default host, or to

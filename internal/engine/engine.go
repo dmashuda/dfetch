@@ -17,6 +17,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/source/ckan"
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/source/jaeger"
+	"github.com/dmashuda/dfetch/internal/source/postgres"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,18 +33,27 @@ type Engine struct {
 	connectors map[string]source.Connector
 }
 
-// builtins are connector types that are available without configuration. Each
-// is also registered under its own name as a schema.
+// builtins are connector types available without configuration. Each is also
+// auto-instantiated under its own name as a schema (so New(nil) must work).
 var builtins = map[string]source.Factory{
 	"datagov": ckan.New,
 	"github":  github.New,
 	"jaeger":  jaeger.New,
 }
 
+// connectorTypes are registered for use via config (`type: <name>`) but are NOT
+// auto-instantiated, because they need params to construct (e.g. a Postgres DSN).
+var connectorTypes = map[string]source.Factory{
+	"postgres": postgres.New,
+}
+
 // New builds an Engine: the built-in connectors plus any declared in config.
 func New(cfg *config.Config) (*Engine, error) {
 	registry := source.NewRegistry()
 	for typeName, factory := range builtins {
+		registry.Register(typeName, factory)
+	}
+	for typeName, factory := range connectorTypes {
 		registry.Register(typeName, factory)
 	}
 
@@ -194,7 +204,8 @@ func parseQuery(ctx context.Context, sql string) (*sqlparse.Query, error) {
 		attribute.Int("dfetch.parse.column_count", len(q.Columns)),
 	}
 	if s := q.Stmt; s != nil {
-		attrs = append(attrs,
+		attrs = append(
+			attrs,
 			attribute.Int("dfetch.parse.source_count", len(s.From)),
 			attribute.Int("dfetch.parse.join_count", len(s.Joins)),
 			attribute.Int("dfetch.parse.where_predicate_count", len(s.Where)),
