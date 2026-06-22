@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/XSAM/otelsql"
@@ -34,6 +35,13 @@ type Connector struct {
 	db      *sql.DB
 	schema  string
 	maxRows int
+
+	// colCache memoizes information_schema.columns lookups so a single query
+	// doesn't pay two round-trips (the engine's DescribeTable at planning time
+	// and Scan's own lookup). dfetch builds a connector per process and table
+	// shapes are stable within a run, so a process-lifetime cache is safe.
+	mu       sync.Mutex
+	colCache map[string][]columnInfo
 }
 
 // New builds a Postgres connector. The DSN comes from params["dsn"], else
@@ -57,7 +65,7 @@ func New(params map[string]any) (source.Connector, error) {
 		return nil, fmt.Errorf("postgres: opening database: %w", err)
 	}
 
-	c := &Connector{db: db, schema: defaultSchema, maxRows: defaultMaxRows}
+	c := &Connector{db: db, schema: defaultSchema, maxRows: defaultMaxRows, colCache: map[string][]columnInfo{}}
 	if s, ok := params["schema"].(string); ok && s != "" {
 		c.schema = s
 	}
@@ -144,8 +152,27 @@ type columnInfo struct {
 }
 
 // columnInfos returns the table's columns in ordinal order with their raw
-// Postgres types (used both for affinity mapping and ORDER BY safety).
+// Postgres types (used both for affinity mapping and ORDER BY safety). Results
+// are memoized so resolving then scanning a table is a single round-trip.
 func (c *Connector) columnInfos(ctx context.Context, table string) ([]columnInfo, error) {
+	c.mu.Lock()
+	cached, ok := c.colCache[table]
+	c.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
+	cols, err := c.fetchColumnInfos(ctx, table)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.colCache[table] = cols
+	c.mu.Unlock()
+	return cols, nil
+}
+
+func (c *Connector) fetchColumnInfos(ctx context.Context, table string) ([]columnInfo, error) {
 	const q = `SELECT column_name, data_type FROM information_schema.columns
 	           WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`
 	rows, err := c.db.QueryContext(ctx, q, c.schema, table)

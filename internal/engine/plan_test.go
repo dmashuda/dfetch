@@ -149,6 +149,15 @@ func TestPlanScanAggregateProjectsAll(t *testing.T) {
 	assert.Nil(t, req.Columns)
 }
 
+// An unqualified SELECT * in a multi-source join expands to every source, so each
+// source needs all its columns — projection must NOT narrow (else SQLite's * would
+// return NULLs for the omitted columns).
+func TestPlanScanStarMultiSourceProjectsAll(t *testing.T) {
+	sql := `SELECT * FROM s.a a JOIN s.b b ON a.k = b.k WHERE a.t > 1`
+	assert.Nil(t, planForJoin(t, sql, 0, "t", "k").Columns) // driving source a
+	assert.Nil(t, planForJoin(t, sql, 1, "k", "v").Columns) // joined source b
+}
+
 // An unqualified column in a multi-source query could belong to this source, so
 // attribution is ambiguous and projection falls back to nil (= all).
 func TestPlanScanProjectionAmbiguousMultiSource(t *testing.T) {
@@ -172,7 +181,8 @@ func TestPlanScanSkipsBindAndUnknownColumns(t *testing.T) {
 
 func TestPlanScanLimitNotPushedForMultiSource(t *testing.T) {
 	q, err := sqlparse.Parse(
-		"SELECT * FROM github.issues i JOIN github.repos r ON i.repo = r.name WHERE i.owner = 'golang' LIMIT 5")
+		"SELECT * FROM github.issues i JOIN github.repos r ON i.repo = r.name WHERE i.owner = 'golang' LIMIT 5",
+	)
 	require.NoError(t, err)
 
 	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}, {Name: "repo"}}}

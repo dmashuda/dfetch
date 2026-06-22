@@ -99,10 +99,13 @@ func neededColumns(stmt *sqlparse.Select, src sqlparse.Source, cols map[string]b
 
 	for _, p := range stmt.Projections {
 		switch {
-		case p.Star && attributable(p.Table, src, single):
-			return nil // SELECT * or src.* needs every column of src
+		case p.Star && (p.Table == "" || attributable(p.Table, src, single)):
+			// An unqualified "*" expands to every source (including src), and
+			// "src.*" to all of src — either way src needs all columns. (A
+			// different source's "other.*" falls through to the next case.)
+			return nil
 		case p.Star:
-			continue // a different source's star
+			continue // a different source's star — does not force src to all columns
 		case p.Expr != "":
 			return nil // expression/aggregate projection may reference src columns
 		default:
