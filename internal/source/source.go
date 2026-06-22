@@ -86,14 +86,47 @@ type Rows struct {
 }
 
 // Connector exposes the tables of one external system.
+//
+// A connector with a small, fixed set of tables returns them all from Tables().
+// A dynamic source (a SQL warehouse with thousands of tables) instead returns an
+// empty or curated Tables() and implements the optional SchemaDescriber and
+// TableLister interfaces below, so the engine resolves only the referenced tables
+// per query and discovery stays lazy.
 type Connector interface {
-	// Tables returns the schemas of every table this connector serves.
+	// Tables returns the schemas of every table this connector serves. A dynamic
+	// connector may return an empty slice and rely on SchemaDescriber instead.
 	Tables() []TableSchema
 	// Scan fetches rows for one table, pushing down what it can from req. It
 	// calls emit once per chunk (e.g. per API page) so the engine can load each
 	// chunk as it arrives instead of buffering the whole result; emit returns an
 	// error to abort the scan early, which Scan should propagate.
 	Scan(ctx context.Context, req ScanRequest, emit func(*Rows) error) error
+}
+
+// SchemaDescriber is an optional capability: a connector that resolves one
+// table's columns on demand rather than enumerating every table up front. The
+// engine prefers DescribeTable over the Tables() lookup when a connector
+// implements it, so a dynamic source only introspects the referenced tables.
+// found is false (with a nil error) when the table does not exist.
+type SchemaDescriber interface {
+	DescribeTable(ctx context.Context, table string) (ts TableSchema, found bool, err error)
+}
+
+// TableLister is an optional capability for discovery: it lists table names
+// (without columns) so `dfetch tables <schema>` can browse a large catalog
+// without loading every column. A connector that implements it need not return
+// those tables from Tables().
+type TableLister interface {
+	ListTables(ctx context.Context, opts ListOptions) ([]string, error)
+}
+
+// ListOptions filters a TableLister.ListTables call.
+type ListOptions struct {
+	// Filter is a case-insensitive substring matched against the table name;
+	// empty matches all.
+	Filter string
+	// Limit caps the number of names returned; 0 means no limit.
+	Limit int
 }
 
 // Factory builds a Connector from its config params.
@@ -125,4 +158,27 @@ func (r *Registry) Build(typeName string, params map[string]any) (Connector, err
 		return nil, fmt.Errorf("unknown connector type %q", typeName)
 	}
 	return f(params)
+}
+
+// StringList reads params[key] as a list of strings, tolerating the shapes YAML
+// produces: a []string, a []any of strings, or a single string. It returns nil
+// when the key is absent or not string-like. Dynamic connectors use it for the
+// scoping convention (e.g. params["schemas"], params["tables"]).
+func StringList(params map[string]any, key string) []string {
+	switch v := params[key].(type) {
+	case []string:
+		return v
+	case string:
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

@@ -44,6 +44,13 @@ joins); see `limitSafeForJoin` in `internal/engine/plan.go`. The connector
 additionally refuses to push unless it consumed every filter and honored the
 order.
 
+Most connectors declare every table in `Tables()`. A **dynamic** source (a SQL
+warehouse) instead returns an empty `Tables()` and implements the optional
+`source.SchemaDescriber` / `source.TableLister` interfaces; the engine resolves a
+referenced table's columns on demand (`resolveTable` prefers `DescribeTable`) and
+`dfetch tables` browses tiered (schemas+counts → names → columns). See the
+"Dynamic sources" section of `internal/source/README.md`.
+
 ## Debugging with traces
 
 dfetch emits OpenTelemetry traces (`internal/telemetry`). Tracing is **off

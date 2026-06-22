@@ -7,6 +7,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/dmashuda/dfetch/internal/config"
@@ -65,14 +67,67 @@ func New(cfg *config.Config) (*Engine, error) {
 	return &Engine{connectors: connectors}, nil
 }
 
-// Schemas returns each connector schema and the tables it serves, for
-// discovery (e.g. the `dfetch tables` command).
-func (e *Engine) Schemas() map[string][]source.TableSchema {
-	out := make(map[string][]source.TableSchema, len(e.connectors))
+// SchemaSummary is one schema's entry in the top-level `dfetch tables` listing.
+type SchemaSummary struct {
+	Schema     string
+	TableCount int  // number of tables, or -1 when a dynamic source couldn't be listed
+	Dynamic    bool // true when the connector lists/describes tables on demand
+}
+
+// SchemaSummaries returns one summary per connector schema (sorted), for the
+// top-level `dfetch tables` view. A dynamic source's count comes from listing its
+// table names; if that fails (e.g. the source is unreachable) the count is -1
+// rather than failing the whole listing.
+func (e *Engine) SchemaSummaries(ctx context.Context) []SchemaSummary {
+	out := make([]SchemaSummary, 0, len(e.connectors))
 	for schema, conn := range e.connectors {
-		out[schema] = conn.Tables()
+		s := SchemaSummary{Schema: schema}
+		if lister, ok := conn.(source.TableLister); ok {
+			s.Dynamic = true
+			names, err := lister.ListTables(ctx, source.ListOptions{})
+			if err != nil {
+				s.TableCount = -1
+			} else {
+				s.TableCount = len(names)
+			}
+		} else {
+			s.TableCount = len(conn.Tables())
+		}
+		out = append(out, s)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Schema < out[j].Schema })
 	return out
+}
+
+// ListTables returns the table names served under schema, filtered by a
+// case-insensitive substring. A dynamic connector (TableLister) lists on demand;
+// a static one lists from Tables().
+func (e *Engine) ListTables(ctx context.Context, schema, filter string) ([]string, error) {
+	conn, ok := e.connectors[schema]
+	if !ok {
+		return nil, fmt.Errorf("no connector for schema %q", schema)
+	}
+	if lister, ok := conn.(source.TableLister); ok {
+		return lister.ListTables(ctx, source.ListOptions{Filter: filter})
+	}
+	var names []string
+	for _, ts := range conn.Tables() {
+		if filter == "" || strings.Contains(strings.ToLower(ts.Name), strings.ToLower(filter)) {
+			names = append(names, ts.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// DescribeTable returns the column schema of one table, resolving it on demand
+// for dynamic connectors (SchemaDescriber) and from Tables() otherwise.
+func (e *Engine) DescribeTable(ctx context.Context, schema, table string) (source.TableSchema, error) {
+	conn, ok := e.connectors[schema]
+	if !ok {
+		return source.TableSchema{}, fmt.Errorf("no connector for schema %q", schema)
+	}
+	return resolveTable(ctx, conn, schema, table)
 }
 
 // Run executes the full pipeline for a SQL query (SQLite syntax).
@@ -94,7 +149,7 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 
 	// Resolve every source and create its table up front, serially: Attach and
 	// the attached-schema map are not goroutine-safe.
-	resolved, err := e.resolveSources(collectSources(q.Stmt))
+	resolved, err := e.resolveSources(ctx, collectSources(q.Stmt))
 	if err != nil {
 		return nil, recordErr(span, err)
 	}
@@ -176,10 +231,10 @@ type resolvedSource struct {
 }
 
 // resolveSources maps every source to its connector and table schema, in order.
-func (e *Engine) resolveSources(sources []sqlparse.Source) ([]resolvedSource, error) {
+func (e *Engine) resolveSources(ctx context.Context, sources []sqlparse.Source) ([]resolvedSource, error) {
 	out := make([]resolvedSource, len(sources))
 	for i, src := range sources {
-		conn, ts, err := e.resolveSource(src)
+		conn, ts, err := e.resolveSource(ctx, src)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +278,7 @@ func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlpar
 }
 
 // resolveSource maps a schema-qualified source to its connector and table schema.
-func (e *Engine) resolveSource(src sqlparse.Source) (source.Connector, source.TableSchema, error) {
+func (e *Engine) resolveSource(ctx context.Context, src sqlparse.Source) (source.Connector, source.TableSchema, error) {
 	if src.Schema == "" {
 		return nil, source.TableSchema{}, fmt.Errorf("table %q has no schema; qualify it with a connector schema (e.g. github.%s)", src.Name, src.Name)
 	}
@@ -231,11 +286,31 @@ func (e *Engine) resolveSource(src sqlparse.Source) (source.Connector, source.Ta
 	if !ok {
 		return nil, source.TableSchema{}, fmt.Errorf("no connector for schema %q", src.Schema)
 	}
-	ts, ok := tableSchema(conn, src.Name)
-	if !ok {
-		return nil, source.TableSchema{}, fmt.Errorf("connector %q has no table %q", src.Schema, src.Name)
+	ts, err := resolveTable(ctx, conn, src.Schema, src.Name)
+	if err != nil {
+		return nil, source.TableSchema{}, err
 	}
 	return conn, ts, nil
+}
+
+// resolveTable returns the column schema of conn's named table, preferring an
+// on-demand SchemaDescriber.DescribeTable (dynamic connectors) and falling back
+// to the Tables() listing (static connectors, or a dynamic connector that also
+// serves curated static tables).
+func resolveTable(ctx context.Context, conn source.Connector, schema, name string) (source.TableSchema, error) {
+	if d, ok := conn.(source.SchemaDescriber); ok {
+		ts, found, err := d.DescribeTable(ctx, name)
+		if err != nil {
+			return source.TableSchema{}, fmt.Errorf("describing %s.%s: %w", schema, name, err)
+		}
+		if found {
+			return ts, nil
+		}
+	}
+	if ts, ok := tableSchema(conn, name); ok {
+		return ts, nil
+	}
+	return source.TableSchema{}, fmt.Errorf("connector %q has no table %q", schema, name)
 }
 
 // tableSchema finds the named table among a connector's tables.

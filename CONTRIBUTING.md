@@ -113,3 +113,9 @@ worked examples, and a step-by-step + checklist — lives next to the code:
 It's detailed enough to hand to an agent as the basis for an implementation plan.
 The existing `internal/source/github` and `internal/source/jaeger` connectors are
 the reference implementations.
+
+A connector with a large/unknown table set (a SQL warehouse) returns an empty
+`Tables()` and instead implements the optional `SchemaDescriber` and `TableLister`
+capabilities, so the engine resolves only the referenced tables per query and
+`dfetch tables` browses lazily (counts → names → columns). See the "Dynamic
+sources" section of the connector guide.
