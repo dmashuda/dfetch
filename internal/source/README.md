@@ -114,6 +114,54 @@ type Rows struct {
 A connector typically also exposes a `New(params map[string]any) (source.Connector, error)`
 that matches `Factory`.
 
+## Dynamic sources (lazy schema)
+
+Connectors with a small, fixed set of tables (the API connectors here) just
+return them all from `Tables()`. A **dynamic source** — a SQL warehouse like
+Postgres or Snowflake with hundreds of tables — should *not* enumerate its whole
+catalog to run one query or to power `dfetch tables`. Such a connector returns an
+empty (or curated) `Tables()` and implements two optional capabilities, which the
+engine detects by type assertion:
+
+```go
+// Resolve one table's columns on demand. The engine prefers this over the
+// Tables() lookup, so only the tables a query references are introspected.
+// found == false (nil error) means "no such table".
+type SchemaDescriber interface {
+    DescribeTable(ctx context.Context, table string) (ts TableSchema, found bool, err error)
+}
+
+// List table names (no columns) for discovery, optionally filtered.
+type TableLister interface {
+    ListTables(ctx context.Context, opts ListOptions) ([]string, error)
+}
+
+type ListOptions struct {
+    Filter string // case-insensitive substring on the table name; "" = all
+    Limit  int    // cap on names returned; 0 = no limit
+}
+```
+
+The engine still creates each referenced table up front, so `DescribeTable` must
+return the **full column list** for the table being resolved (it runs during
+resolution, before `Scan`). `dfetch tables` uses these for its tiered view:
+schemas + counts → `ListTables` names → `DescribeTable` columns.
+
+**Scoping via config.** Bound what a dynamic source exposes through `params`
+(no special config schema — just documented keys your `New` reads). The
+conventional keys are `schemas` (namespaces to expose) and `tables` (an explicit
+allowlist); parse them with the `source.StringList(params, key)` helper, which
+tolerates a YAML list or a single string:
+
+```yaml
+sources:
+  - name: warehouse
+    type: postgres
+    params:
+      schemas: [public, analytics]
+      tables:  [public.orders, public.users]   # optional allowlist
+```
+
 ## The query lifecycle in detail
 
 What the engine does around your connector (`internal/engine/engine.go`,
