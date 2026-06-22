@@ -79,6 +79,7 @@ internal/source         Connector interface + ScanRequest (push-down) + registry
 internal/source/github  GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
 internal/source/jaeger  Jaeger connector (spans, services, operations)
 internal/source/ckan    CKAN/data.gov connector (datasets, resources, organizations, groups)
+internal/source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve

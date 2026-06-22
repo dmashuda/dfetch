@@ -12,3 +12,17 @@ services:
       - "4318:4318"   # OTLP/HTTP (dfetch exports here)
       - "4317:4317"   # OTLP/gRPC
     restart: unless-stopped
+
+  # Local Postgres for the postgres connector's integration tests:
+  #   DFETCH_TEST_POSTGRES_DSN='postgres://dfetch:dfetch@localhost:5432/dfetch?sslmode=disable' \
+  #     go test -tags integration ./internal/source/postgres/
+  postgres:
+    image: postgres:16
+    container_name: dfetch-postgres
+    environment:
+      - POSTGRES_USER=dfetch
+      - POSTGRES_PASSWORD=dfetch
+      - POSTGRES_DB=dfetch
+    ports:
+      - "5432:5432"
+    restart: unless-stopped

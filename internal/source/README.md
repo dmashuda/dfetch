@@ -329,6 +329,14 @@ push-down assertions; LIMIT-not-pushed when ordering can't be honored;
 missing-required-filter returns an error **without** calling the API; pagination/
 streaming; and API-error surfacing. `make coverage` enforces a coverage gate.
 
+**Database connectors** can't use `httptest`. Follow `internal/source/postgres`
+instead: factor the request-building into **pure functions** (`buildSelect`, type
+mapping, value normalization) and unit-test those directly (asserting the generated
+SQL + args is the analog of capturing the outbound HTTP request) so they count
+toward coverage; then add a **gated integration test** (`//go:build integration`)
+that runs against a real database from `$DFETCH_TEST_POSTGRES_DSN` and `t.Skip`s
+when it's unset. CI provides the database as a service container.
+
 ## Reference implementations
 
 **`internal/source/github`** — REST over `net/http`. Shows: required path-param
@@ -345,6 +353,17 @@ column (`timeBounds`, defaulting to the last hour) and a duration window
 (no service/window needed), flattening nested JSON into rows, an `attributes` JSON
 column, OTLP enums rendered as readable strings, and decoding a streamed grpc-gateway
 response with a `json.Decoder` loop (one chunk per decoded object).
+
+**`internal/source/postgres`** — the reference **dynamic / SQL** connector
+(`database/sql` + `jackc/pgx`). Shows: an empty `Tables()` with `SchemaDescriber`/
+`TableLister` backed by `information_schema`; mapping Postgres types to SQLite
+affinities; and translating a `ScanRequest` into a real parameterized
+`SELECT … WHERE … ORDER BY … LIMIT` (`buildSelect`) — pushing only operators
+Postgres and SQLite evaluate identically (no `LIKE`), pushing `ORDER BY`+`LIMIT`
+only for order-safe column types with NULL placement aligned to SQLite
+(`orderPushSafe`), and honoring the engine-supplied column projection
+(`ScanRequest.Columns`). It is config-only (registered for `type: postgres`, never
+auto-instantiated), so it has no `base_url`-style builtin default.
 
 ## Invariants and gotchas
 

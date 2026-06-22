@@ -130,6 +130,40 @@ func TestPlanScanFiltersAndOrder(t *testing.T) {
 	assert.Equal(t, 10, *req.Limit)
 }
 
+// Projection push-down: a simple column SELECT narrows req.Columns to every
+// column the source is referenced by (projection + WHERE + ORDER BY).
+func TestPlanScanProjectsReferencedColumns(t *testing.T) {
+	req := planFor(t, "SELECT owner, state FROM github.issues WHERE comments > 5 ORDER BY updated_at DESC")
+	assert.Equal(t, []string{"comments", "owner", "state", "updated_at"}, req.Columns)
+}
+
+// SELECT * needs every column, so projection falls back to nil (= all).
+func TestPlanScanStarProjectsAll(t *testing.T) {
+	req := planFor(t, "SELECT * FROM github.issues WHERE owner='x'")
+	assert.Nil(t, req.Columns)
+}
+
+// An aggregate/expression projection may reference columns we can't see -> all.
+func TestPlanScanAggregateProjectsAll(t *testing.T) {
+	req := planFor(t, "SELECT count(*) FROM github.issues WHERE owner='x'")
+	assert.Nil(t, req.Columns)
+}
+
+// An unqualified column in a multi-source query could belong to this source, so
+// attribution is ambiguous and projection falls back to nil (= all).
+func TestPlanScanProjectionAmbiguousMultiSource(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a JOIN s.b b ON a.k = b.k WHERE k = 'v'`
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Nil(t, req.Columns)
+}
+
+// Fully-qualified columns in a join narrow to the source's referenced set.
+func TestPlanScanProjectionQualifiedMultiSource(t *testing.T) {
+	sql := `SELECT a.t FROM s.a a JOIN s.b b ON a.k = b.k WHERE a.t > 1`
+	req := planForJoin(t, sql, 0, "t", "k")
+	assert.Equal(t, []string{"k", "t"}, req.Columns)
+}
+
 func TestPlanScanSkipsBindAndUnknownColumns(t *testing.T) {
 	req := planFor(t, "SELECT * FROM github.issues WHERE owner = :o AND missing_col = 'x'")
 	// :o is a bind (not pushable); missing_col is not in the table schema.
