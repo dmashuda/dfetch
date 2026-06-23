@@ -1,0 +1,82 @@
+# dfetch config for the dfetch repo itself.
+#
+# The github, jaeger, and datagov connectors are built in and need no `sources`
+# entry. github talks to api.github.com (set GITHUB_TOKEN in the environment);
+# jaeger defaults to the local instance from `docker compose up -d` (UI :16686).
+# To point either at a different host, add a `sources` entry — e.g.:
+#
+# sources:
+#   - name: jaeger
+#     type: jaeger
+#     params:
+#       base_url: http://jaeger.example.com:16686
+
+queries:
+  # Latest error spans for a service (defaults to a 1-hour window in Jaeger).
+  # e.g. dfetch run jaeger-errors dfetch
+  - name: jaeger-errors
+    description: Latest error spans for a service
+    params: [service]
+    columns: [start_time, operation_name, status_message, trace_id]
+    sql: |
+      SELECT start_time, service_name, operation_name, status_message,
+             duration_ms, status_code, trace_id
+      FROM jaeger.spans
+      WHERE service_name = :service AND status_code = 'error'
+      ORDER BY start_time DESC
+      LIMIT 50
+
+  # Every span in a trace, in start order.
+  # e.g. dfetch run trace-spans 4f8e2a1b...
+  - name: trace-spans
+    description: All spans for a trace
+    params: [trace_id]
+    columns: [start_time, service_name, operation_name, duration_ms, status_code]
+    sql: |
+      SELECT start_time, service_name, operation_name, duration_ms,
+             status_code, status_message, span_id, parent_span_id
+      FROM jaeger.spans
+      WHERE trace_id = :trace_id
+      ORDER BY start_time
+
+  # Open, non-draft PRs on this repo (there is no reviewer field upstream, so
+  # "to review" == open and ready). e.g. dfetch run prs-to-review
+  - name: prs-to-review
+    description: Open, ready-for-review PRs on dmashuda/dfetch
+    params: []
+    columns: [number, title, user_login, created_at]
+    sql: |
+      SELECT number, title, user_login, draft, created_at, updated_at, html_url
+      FROM github.pulls
+      WHERE owner = 'dmashuda' AND repo = 'dfetch'
+        AND state = 'open' AND draft = 0
+      ORDER BY created_at
+
+  # CI run statuses for a branch (pass the PR's head branch).
+  # e.g. dfetch run pr-checks feat/per-project-config-saved-queries
+  - name: pr-checks
+    description: Workflow run statuses for a branch
+    params: [branch]
+    columns: [name, status, conclusion, run_started_at]
+    sql: |
+      SELECT name, head_branch, status, conclusion, run_started_at,
+             updated_at, html_url
+      FROM github.workflow_runs
+      WHERE owner = 'dmashuda' AND repo = 'dfetch'
+        AND head_branch = :branch
+      ORDER BY created_at DESC
+
+  # Recent workflow runs with computed wall-clock duration (seconds).
+  # e.g. dfetch run workflow-times
+  - name: workflow-times
+    description: Recent workflow runs with computed durations
+    params: []
+    columns: [name, head_branch, conclusion, duration_s, run_started_at]
+    sql: |
+      SELECT name, head_branch, event, conclusion, run_started_at,
+             ROUND((julianday(updated_at) - julianday(run_started_at)) * 86400, 1) AS duration_s,
+             html_url
+      FROM github.workflow_runs
+      WHERE owner = 'dmashuda' AND repo = 'dfetch'
+      ORDER BY created_at DESC
+      LIMIT 50
