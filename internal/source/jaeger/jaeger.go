@@ -28,21 +28,32 @@ const defaultBaseURL = "http://localhost:16686"
 // unbounded query needs a default rather than fetching all of history.
 const defaultWindow = time.Hour
 
-// maxTraces caps how many traces api_v3 returns for one scan (query.search_depth)
-// so an unbounded query doesn't pull the entire store.
-const maxTraces = 1000
+// defaultWarnTraces is the trace count at which an uncapped scan warns that the
+// result is large and may have been truncated server-side (so the user can narrow
+// the window or set max_traces). It is only a warning threshold, never sent to the
+// server.
+const defaultWarnTraces = 1000
 
-// Connector talks to the Jaeger api_v3 query service.
+// Connector talks to the Jaeger api_v3 query service. maxTraces is 0 by default,
+// meaning the api_v3 search_depth is left unset so the Jaeger query service
+// applies its own limit. We deliberately do NOT send a default search_depth:
+// api_v3 rejects any value that is not strictly below the server's configured
+// max-traces limit ("search depth must be greater than 0 and less than max
+// traces"), so a fixed default breaks deployments with a low limit. Setting the
+// max_traces param opts into an explicit cap (which must be below that limit).
 type Connector struct {
-	client  *http.Client
-	baseURL string
-	token   string
+	client    *http.Client
+	baseURL   string
+	token     string
+	maxTraces int // 0 = unset (omit search_depth; let the server bound the scan)
 }
 
 // New builds a Jaeger connector. Supported params: "base_url" (override the
-// Jaeger query host; defaults to http://localhost:16686, also used by tests). An
-// optional bearer token comes from $JAEGER_TOKEN for secured deployments; local
-// Jaeger needs none.
+// Jaeger query host; defaults to http://localhost:16686, also used by tests) and
+// "max_traces" (an explicit api_v3 search_depth cap; omitted by default so the
+// server's own limit applies — set it below the server's max-traces if you want a
+// deterministic cap). An optional bearer token comes from $JAEGER_TOKEN for
+// secured deployments; local Jaeger needs none.
 func New(params map[string]any) (source.Connector, error) {
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
@@ -57,7 +68,25 @@ func New(params map[string]any) (source.Connector, error) {
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
+	if n, ok := intParam(params["max_traces"]); ok && n > 0 {
+		c.maxTraces = n
+	}
 	return c, nil
+}
+
+// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
+// int64, or float64).
+func intParam(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func firstEnv(keys ...string) string {

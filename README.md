@@ -183,6 +183,13 @@ Notes:
 - `kind` and `status_code` are the OTLP enums as readable strings
   (`internal`/`server`/`client`/…, `unset`/`ok`/`error`); `attributes` is the
   span's attribute list as a JSON object, queryable with SQLite's `json_extract`.
+- `max_traces` (param) sets the api_v3 `search_depth` — an explicit cap on how
+  many traces one scan fetches. **By default it's omitted**, so the Jaeger query
+  service applies its own limit (the time window already bounds the scan) and
+  dfetch works against any server out of the box. api_v3 rejects a `search_depth`
+  that isn't strictly below the server's own max-traces limit (`search depth must
+  be greater than 0 and less than max traces`); set `max_traces` below that limit
+  only if you want a deterministic cap.
 - Set `JAEGER_TOKEN` for a bearer-authenticated deployment.
 
 ### data.gov / CKAN — schema `datagov`

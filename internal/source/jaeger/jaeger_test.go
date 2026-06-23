@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,6 +14,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestConnectorWith builds a connector against a test server with extra params.
+func newTestConnectorWith(t *testing.T, params map[string]any, h http.HandlerFunc) *Connector {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	params["base_url"] = srv.URL
+	c, err := New(params)
+	require.NoError(t, err)
+	return c.(*Connector)
+}
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
@@ -147,7 +159,7 @@ func TestScanSpansPushdown(t *testing.T) {
 	assert.Equal(t, "2026-06-01T00:00:00Z", gotQuery.Get("query.start_time_min"))
 	assert.Equal(t, "2026-06-02T00:00:00Z", gotQuery.Get("query.start_time_max"))
 	assert.Equal(t, "0.005s", gotQuery.Get("query.duration_min"))
-	assert.Equal(t, "1000", gotQuery.Get("query.search_depth")) // fetch cap, not the LIMIT
+	assert.Empty(t, gotQuery.Get("query.search_depth")) // omitted by default; the SQL LIMIT is not pushed
 }
 
 func TestScanSpansDefaultsTimeWindow(t *testing.T) {
@@ -264,6 +276,64 @@ func TestScanSpansWithStartTimeNoWindowWarning(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, res.Warnings)
+}
+
+// By default no search_depth is sent (the server bounds the scan); setting
+// max_traces opts into an explicit api_v3 search_depth cap.
+func TestScanSpansSearchDepthConfigurable(t *testing.T) {
+	req := source.ScanRequest{Table: "spans", Filters: []source.Filter{eqFilter("service_name", "dfetch")}}
+
+	gotDefault := "sentinel"
+	def := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotDefault = r.URL.Query().Get("query.search_depth")
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	_, err := collectScan(def, req)
+	require.NoError(t, err)
+	assert.Empty(t, gotDefault, "default must not send search_depth") // omitted
+
+	var gotConfigured string
+	cfg := newTestConnectorWith(t, map[string]any{"max_traces": 250}, func(w http.ResponseWriter, r *http.Request) {
+		gotConfigured = r.URL.Query().Get("query.search_depth")
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	_, err = collectScan(cfg, req)
+	require.NoError(t, err)
+	assert.Equal(t, "250", gotConfigured) // honors max_traces
+}
+
+// Reproduces the customer's server (a low max-traces limit) and proves the
+// out-of-the-box default works against it, while an over-limit max_traces fails.
+func TestScanSpansServerMaxTracesLimit(t *testing.T) {
+	const serverMax = 500
+	// Mirrors api_v3: an explicit search_depth must be in (0, serverMax); an absent
+	// one is fine (the server applies its own limit).
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if v := r.URL.Query().Get("query.search_depth"); v != "" {
+			if d, _ := strconv.Atoi(v); d <= 0 || d >= serverMax {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"httpCode":400,"message":"search depth must be greater than 0 and less than max traces"}}`))
+				return
+			}
+		}
+		_, _ = w.Write([]byte(oneTrace))
+	}
+	req := source.ScanRequest{Table: "spans", Filters: []source.Filter{eqFilter("service_name", "dfetch")}}
+
+	// Out of the box (no search_depth sent) → works against the low-limit server.
+	res, err := collectScan(newTestConnector(t, handler), req)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Rows)
+
+	// An explicit max_traces at/above the server limit → the error is surfaced.
+	_, err = collectScan(newTestConnectorWith(t, map[string]any{"max_traces": 1000}, handler), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max traces")
+
+	// An explicit max_traces below the server limit → success.
+	res, err = collectScan(newTestConnectorWith(t, map[string]any{"max_traces": 100}, handler), req)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Rows)
 }
 
 func TestScanSpansRequiresService(t *testing.T) {
