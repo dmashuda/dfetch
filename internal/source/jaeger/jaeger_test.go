@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,6 +14,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestConnectorWith builds a connector against a test server with extra params.
+func newTestConnectorWith(t *testing.T, params map[string]any, h http.HandlerFunc) *Connector {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	params["base_url"] = srv.URL
+	c, err := New(params)
+	require.NoError(t, err)
+	return c.(*Connector)
+}
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
@@ -264,6 +276,57 @@ func TestScanSpansWithStartTimeNoWindowWarning(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, res.Warnings)
+}
+
+// search_depth is sent as the api_v3 query.search_depth and is configurable via
+// the max_traces param (default 1000) — newer Jaeger rejects a search_depth that
+// is not strictly below the server's own max-traces limit.
+func TestScanSpansSearchDepthConfigurable(t *testing.T) {
+	req := source.ScanRequest{Table: "spans", Filters: []source.Filter{eqFilter("service_name", "dfetch")}}
+
+	var gotDefault string
+	def := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotDefault = r.URL.Query().Get("query.search_depth")
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	_, err := collectScan(def, req)
+	require.NoError(t, err)
+	assert.Equal(t, "1000", gotDefault) // default
+
+	var gotConfigured string
+	cfg := newTestConnectorWith(t, map[string]any{"max_traces": 250}, func(w http.ResponseWriter, r *http.Request) {
+		gotConfigured = r.URL.Query().Get("query.search_depth")
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	_, err = collectScan(cfg, req)
+	require.NoError(t, err)
+	assert.Equal(t, "250", gotConfigured) // honors max_traces
+}
+
+// Reproduces the customer's symptom: a Jaeger whose max-traces limit is below the
+// requested search_depth rejects the request; lowering max_traces resolves it.
+func TestScanSpansServerMaxTracesLimit(t *testing.T) {
+	const serverMax = 500
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		d, _ := strconv.Atoi(r.URL.Query().Get("query.search_depth"))
+		if d <= 0 || d >= serverMax {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"httpCode":400,"message":"search depth must be greater than 0 and less than max traces"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(oneTrace))
+	}
+	req := source.ScanRequest{Table: "spans", Filters: []source.Filter{eqFilter("service_name", "dfetch")}}
+
+	// Default search_depth=1000 >= serverMax → the error is surfaced.
+	_, err := collectScan(newTestConnector(t, handler), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max traces")
+
+	// max_traces below the server's limit → success.
+	res, err := collectScan(newTestConnectorWith(t, map[string]any{"max_traces": 100}, handler), req)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Rows)
 }
 
 func TestScanSpansRequiresService(t *testing.T) {

@@ -133,7 +133,7 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 	// SQL LIMIT is not pushed: search_depth caps traces, but a LIMIT on spans
 	// counts spans (one trace has many), so pushing it would be unsound. SQLite
 	// applies the LIMIT. search_depth is only a fetch cap on an unbounded scan.
-	q.Set("query.search_depth", strconv.Itoa(maxTraces))
+	q.Set("query.search_depth", strconv.Itoa(c.maxTraces))
 
 	// Count distinct traces returned so we can warn if the search_depth cap was hit.
 	traces := map[string]struct{}{}
@@ -155,8 +155,8 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 			return err
 		}
 	}
-	if len(traces) >= maxTraces {
-		if err := emit(source.Warn("jaeger.spans: truncated at the %d-trace search cap; narrow the time range or add filters for complete results", maxTraces)); err != nil {
+	if len(traces) >= c.maxTraces {
+		if err := emit(source.Warn("jaeger.spans: truncated at the %d-trace search cap; narrow the time range or add filters for complete results", c.maxTraces)); err != nil {
 			return err
 		}
 	}

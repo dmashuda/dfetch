@@ -3,10 +3,9 @@
 # View traces at http://localhost:16686 (service: dfetch).
 services:
   jaeger:
-    image: jaegertracing/all-in-one:1.62.0
+    # Jaeger v2 (built on the OpenTelemetry Collector); OTLP is enabled by default.
+    image: jaegertracing/jaeger:2.19.0
     container_name: dfetch-jaeger
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
     ports:
       - "16686:16686" # Jaeger UI
       - "4318:4318"   # OTLP/HTTP (dfetch exports here)

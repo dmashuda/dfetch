@@ -28,21 +28,29 @@ const defaultBaseURL = "http://localhost:16686"
 // unbounded query needs a default rather than fetching all of history.
 const defaultWindow = time.Hour
 
-// maxTraces caps how many traces api_v3 returns for one scan (query.search_depth)
-// so an unbounded query doesn't pull the entire store.
-const maxTraces = 1000
+// defaultMaxTraces caps how many traces api_v3 returns for one scan
+// (query.search_depth) so an unbounded query doesn't pull the entire store.
+//
+// api_v3 requires search_depth to be strictly LESS THAN the Jaeger query
+// service's own configured max-traces limit, so deployments that set a low limit
+// reject our request ("search depth must be greater than 0 and less than max
+// traces"). The limit is server-specific, so it's overridable via the max_traces
+// param (mirroring base_url).
+const defaultMaxTraces = 1000
 
 // Connector talks to the Jaeger api_v3 query service.
 type Connector struct {
-	client  *http.Client
-	baseURL string
-	token   string
+	client    *http.Client
+	baseURL   string
+	token     string
+	maxTraces int
 }
 
 // New builds a Jaeger connector. Supported params: "base_url" (override the
-// Jaeger query host; defaults to http://localhost:16686, also used by tests). An
-// optional bearer token comes from $JAEGER_TOKEN for secured deployments; local
-// Jaeger needs none.
+// Jaeger query host; defaults to http://localhost:16686, also used by tests) and
+// "max_traces" (the api_v3 search_depth, which must be below the Jaeger query
+// service's own max-traces limit; defaults to 1000). An optional bearer token
+// comes from $JAEGER_TOKEN for secured deployments; local Jaeger needs none.
 func New(params map[string]any) (source.Connector, error) {
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
@@ -51,13 +59,32 @@ func New(params map[string]any) (source.Connector, error) {
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		baseURL: defaultBaseURL,
-		token:   firstEnv("JAEGER_TOKEN"),
+		baseURL:   defaultBaseURL,
+		token:     firstEnv("JAEGER_TOKEN"),
+		maxTraces: defaultMaxTraces,
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
+	if n, ok := intParam(params["max_traces"]); ok && n > 0 {
+		c.maxTraces = n
+	}
 	return c, nil
+}
+
+// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
+// int64, or float64).
+func intParam(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func firstEnv(keys ...string) string {
