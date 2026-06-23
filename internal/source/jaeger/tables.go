@@ -131,11 +131,16 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 		}
 	}
 	// SQL LIMIT is not pushed: search_depth caps traces, but a LIMIT on spans
-	// counts spans (one trace has many), so pushing it would be unsound. SQLite
-	// applies the LIMIT. search_depth is only a fetch cap on an unbounded scan.
-	q.Set("query.search_depth", strconv.Itoa(c.maxTraces))
+	// counts spans (one trace has many), so pushing it would be unsound — SQLite
+	// applies the LIMIT. search_depth is only a fetch cap on an unbounded scan, and
+	// is sent ONLY when max_traces is configured: api_v3 rejects any value not
+	// strictly below the server's max-traces limit, so by default we omit it and
+	// let the server (plus the time window) bound the scan.
+	if c.maxTraces > 0 {
+		q.Set("query.search_depth", strconv.Itoa(c.maxTraces))
+	}
 
-	// Count distinct traces returned so we can warn if the search_depth cap was hit.
+	// Count distinct traces returned so we can warn if the result looks truncated.
 	traces := map[string]struct{}{}
 	counting := func(chunk *source.Rows) error {
 		for _, row := range chunk.Rows {
@@ -155,8 +160,14 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 			return err
 		}
 	}
-	if len(traces) >= c.maxTraces {
-		if err := emit(source.Warn("jaeger.spans: truncated at the %d-trace search cap; narrow the time range or add filters for complete results", c.maxTraces)); err != nil {
+	// Warn when the result is large enough to likely be truncated — by our own cap
+	// (max_traces) if set, otherwise by the server's limit (the warning threshold).
+	warnAt := c.maxTraces
+	if warnAt == 0 {
+		warnAt = defaultWarnTraces
+	}
+	if len(traces) >= warnAt {
+		if err := emit(source.Warn("jaeger.spans: returned %d+ traces; results may be truncated — narrow the time range, add filters, or set the max_traces param", warnAt)); err != nil {
 			return err
 		}
 	}

@@ -28,29 +28,32 @@ const defaultBaseURL = "http://localhost:16686"
 // unbounded query needs a default rather than fetching all of history.
 const defaultWindow = time.Hour
 
-// defaultMaxTraces caps how many traces api_v3 returns for one scan
-// (query.search_depth) so an unbounded query doesn't pull the entire store.
-//
-// api_v3 requires search_depth to be strictly LESS THAN the Jaeger query
-// service's own configured max-traces limit, so deployments that set a low limit
-// reject our request ("search depth must be greater than 0 and less than max
-// traces"). The limit is server-specific, so it's overridable via the max_traces
-// param (mirroring base_url).
-const defaultMaxTraces = 1000
+// defaultWarnTraces is the trace count at which an uncapped scan warns that the
+// result is large and may have been truncated server-side (so the user can narrow
+// the window or set max_traces). It is only a warning threshold, never sent to the
+// server.
+const defaultWarnTraces = 1000
 
-// Connector talks to the Jaeger api_v3 query service.
+// Connector talks to the Jaeger api_v3 query service. maxTraces is 0 by default,
+// meaning the api_v3 search_depth is left unset so the Jaeger query service
+// applies its own limit. We deliberately do NOT send a default search_depth:
+// api_v3 rejects any value that is not strictly below the server's configured
+// max-traces limit ("search depth must be greater than 0 and less than max
+// traces"), so a fixed default breaks deployments with a low limit. Setting the
+// max_traces param opts into an explicit cap (which must be below that limit).
 type Connector struct {
 	client    *http.Client
 	baseURL   string
 	token     string
-	maxTraces int
+	maxTraces int // 0 = unset (omit search_depth; let the server bound the scan)
 }
 
 // New builds a Jaeger connector. Supported params: "base_url" (override the
 // Jaeger query host; defaults to http://localhost:16686, also used by tests) and
-// "max_traces" (the api_v3 search_depth, which must be below the Jaeger query
-// service's own max-traces limit; defaults to 1000). An optional bearer token
-// comes from $JAEGER_TOKEN for secured deployments; local Jaeger needs none.
+// "max_traces" (an explicit api_v3 search_depth cap; omitted by default so the
+// server's own limit applies — set it below the server's max-traces if you want a
+// deterministic cap). An optional bearer token comes from $JAEGER_TOKEN for
+// secured deployments; local Jaeger needs none.
 func New(params map[string]any) (source.Connector, error) {
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
@@ -59,9 +62,8 @@ func New(params map[string]any) (source.Connector, error) {
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		baseURL:   defaultBaseURL,
-		token:     firstEnv("JAEGER_TOKEN"),
-		maxTraces: defaultMaxTraces,
+		baseURL: defaultBaseURL,
+		token:   firstEnv("JAEGER_TOKEN"),
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
