@@ -242,6 +242,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 		batch = make([][]any, 0, batchSize)
 		return nil
 	}
+	total := 0
 	for rows.Next() {
 		cells := make([]any, len(colNames))
 		ptrs := make([]any, len(colNames))
@@ -255,6 +256,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 			cells[i] = normalize(cells[i])
 		}
 		batch = append(batch, cells)
+		total++
 		if len(batch) >= batchSize {
 			if err := flush(); err != nil {
 				return err
@@ -264,7 +266,15 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return flush()
+	if err := flush(); err != nil {
+		return err
+	}
+	// Hitting exactly maxRows means the cap LIMIT in buildSelect likely truncated
+	// an unbounded scan; a pushed user LIMIT < maxRows returns fewer and won't warn.
+	if total >= c.maxRows {
+		return emit(source.Warn("postgres.%s: capped at max_rows=%d; raise the max_rows param or add a LIMIT/filters for the rest", req.Table, c.maxRows))
+	}
+	return nil
 }
 
 // pgTypeToAffinity maps a Postgres data_type to a SQLite column affinity. numeric/

@@ -100,7 +100,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 func (c *Connector) get(ctx context.Context, rawurl string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jaeger: GET %s: %w", rawurl, err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if c.token != "" {
@@ -109,7 +109,7 @@ func (c *Connector) get(ctx context.Context, rawurl string) (*http.Response, err
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jaeger: GET %s: %w", rawurl, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(resp.Body)
@@ -172,6 +172,21 @@ func requireStringEq(req source.ScanRequest, col string) (string, error) {
 // start_time column, defaulting to the last window and now when a bound is absent
 // (api_v3 requires both). The engine offers >, >=, <, <=, BETWEEN as filters; an
 // unparseable literal is ignored (SQLite re-applies the predicate anyway).
+// hasStartTimeFilter reports whether the query constrained start_time at all, so
+// the caller can warn when it instead fell back to the default search window.
+func hasStartTimeFilter(req source.ScanRequest) bool {
+	for _, f := range req.Filters {
+		if f.Column != "start_time" {
+			continue
+		}
+		switch f.Op {
+		case sqlparse.OpGt, sqlparse.OpGte, sqlparse.OpLt, sqlparse.OpLte, sqlparse.OpBetween:
+			return true
+		}
+	}
+	return false
+}
+
 func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (min, max time.Time) {
 	min, max = now.Add(-window), now
 	var minSet, maxSet bool

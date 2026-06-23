@@ -26,24 +26,29 @@ func eqFilter(col, val string) source.Filter {
 	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
 }
 
-// collectScan runs Scan and accumulates every emitted chunk into one Rows.
+// collectScan runs Scan and accumulates every emitted chunk into one Rows,
+// including any Warnings.
 func collectScan(c source.Connector, req source.ScanRequest) (*source.Rows, error) {
 	rows := &source.Rows{}
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		if rows.Columns == nil {
+		if rows.Columns == nil && len(chunk.Columns) > 0 {
 			rows.Columns = chunk.Columns
 		}
 		rows.Rows = append(rows.Rows, chunk.Rows...)
+		rows.Warnings = append(rows.Warnings, chunk.Warnings...)
 		return nil
 	})
 	return rows, err
 }
 
-// scanChunkSizes runs Scan and records the row count of each emitted chunk.
+// scanChunkSizes runs Scan and records the row count of each data chunk
+// (warning-only chunks carry no rows and are ignored here).
 func scanChunkSizes(c source.Connector, req source.ScanRequest) ([]int, error) {
 	var sizes []int
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		sizes = append(sizes, len(chunk.Rows))
+		if len(chunk.Rows) > 0 {
+			sizes = append(sizes, len(chunk.Rows))
+		}
 		return nil
 	})
 	return sizes, err
@@ -328,10 +333,13 @@ func TestScanDatasetsMaxPagesCap(t *testing.T) {
 		calls++
 		_, _ = w.Write([]byte(searchResp(1_000_000, page(100)))) // always more available
 	})
-	sizes, err := scanChunkSizes(c, source.ScanRequest{Table: "datasets"})
+	res, err := collectScan(c, source.ScanRequest{Table: "datasets"})
 	require.NoError(t, err)
-	assert.Equal(t, maxPages, calls) // unbounded scan capped
-	assert.Len(t, sizes, maxPages)
+	assert.Equal(t, maxPages, calls)      // unbounded scan capped
+	assert.Len(t, res.Rows, maxPages*100) // maxPages full data pages
+	require.NotEmpty(t, res.Warnings)     // truncation surfaced
+	assert.Contains(t, res.Warnings[0], "cap")
+	assert.Contains(t, res.Warnings[0], "datagov.datasets")
 }
 
 func TestScanDatasetsAPIError(t *testing.T) {

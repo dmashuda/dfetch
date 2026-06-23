@@ -57,6 +57,8 @@ return every column the query produces. Use 'dfetch queries' to list saved queri
 			return err
 		}
 
+		printWarnings(cmd, result.Warnings)
+
 		if !runAllColumns {
 			result, err = result.Project(sq.Columns)
 			if err != nil {

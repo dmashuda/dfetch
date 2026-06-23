@@ -280,6 +280,9 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 				return err
 			}
 		}
+		if err := pageCapped(pushLimit, pages, next, "issues", emit); err != nil {
+			return err
+		}
 		if pushLimit && sent >= stopAt {
 			return nil
 		}
@@ -337,6 +340,9 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest, emit 
 			if err := emit(&source.Rows{Columns: colNames(pullsCols), Rows: page}); err != nil {
 				return err
 			}
+		}
+		if err := pageCapped(pushLimit, pages, next, "pulls", emit); err != nil {
+			return err
 		}
 		if pushLimit && sent >= stopAt {
 			return nil
@@ -399,6 +405,9 @@ func (c *Connector) scanRepos(ctx context.Context, req source.ScanRequest, emit 
 			if err := emit(&source.Rows{Columns: colNames(reposCols), Rows: page}); err != nil {
 				return err
 			}
+		}
+		if err := pageCapped(pushLimit, pages, next, "repos", emit); err != nil {
+			return err
 		}
 		if pushLimit && sent >= stopAt {
 			return nil
@@ -476,6 +485,9 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 				return err
 			}
 		}
+		if err := pageCapped(pushLimit, pages, next, "commits", emit); err != nil {
+			return err
+		}
 		if pushLimit && sent >= stopAt {
 			return nil
 		}
@@ -538,6 +550,9 @@ func (c *Connector) scanReleases(ctx context.Context, req source.ScanRequest, em
 			if err := emit(&source.Rows{Columns: colNames(releasesCols), Rows: page}); err != nil {
 				return err
 			}
+		}
+		if err := pageCapped(pushLimit, pages, next, "releases", emit); err != nil {
+			return err
 		}
 		if pushLimit && sent >= stopAt {
 			return nil
@@ -605,6 +620,9 @@ func (c *Connector) scanWorkflowRuns(ctx context.Context, req source.ScanRequest
 				return err
 			}
 		}
+		if err := pageCapped(pushLimit, pages, next, "workflow_runs", emit); err != nil {
+			return err
+		}
 		if pushLimit && sent >= stopAt {
 			return nil
 		}
@@ -662,6 +680,9 @@ func (c *Connector) scanArtifacts(ctx context.Context, req source.ScanRequest, e
 				return err
 			}
 		}
+		if err := pageCapped(pushLimit, pages, next, "artifacts", emit); err != nil {
+			return err
+		}
 		if pushLimit && sent >= stopAt {
 			return nil
 		}
@@ -679,6 +700,17 @@ func artifactRow(owner, repo string, a ghArtifact) []any {
 		nullable(a.CreatedAt), nullable(a.UpdatedAt), nullable(a.ExpiresAt), nullable(a.Digest),
 		runID, headBranch, headSHA, a.ArchiveDownloadURL,
 	}
+}
+
+// pageCapped emits a truncation warning when an uncapped scan stops on its final
+// allowed page (maxPages) while the API still has more pages, so the user knows
+// the result is a subset. It is a no-op when a LIMIT was pushed or the data was
+// exhausted before the cap.
+func pageCapped(pushLimit bool, pages int, next, table string, emit func(*source.Rows) error) error {
+	if pushLimit || pages != maxPages-1 || next == "" {
+		return nil
+	}
+	return emit(source.Warn("github.%s: stopped at the %d-page cap; results may be incomplete — add a LIMIT or narrower filters", table, maxPages))
 }
 
 func colNames(cols []source.Column) []string {

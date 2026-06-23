@@ -8,10 +8,13 @@ import (
 	"strings"
 )
 
-// Result holds the columns and rows produced by a resolved query.
+// Result holds the columns and rows produced by a resolved query, plus any
+// non-fatal warnings gathered while fetching (e.g. a connector truncated at a
+// cap, so the result may be incomplete).
 type Result struct {
-	Columns []string
-	Rows    [][]any
+	Columns  []string
+	Rows     [][]any
+	Warnings []string
 }
 
 // Project returns a copy of the result narrowed to cols, in the given order.
@@ -50,7 +53,7 @@ func (r *Result) Project(cols []string) (*Result, error) {
 
 	projected := make([]string, len(cols))
 	copy(projected, cols)
-	return &Result{Columns: projected, Rows: rows}, nil
+	return &Result{Columns: projected, Rows: rows, Warnings: r.Warnings}, nil
 }
 
 // Write renders the result to w in the requested format: "table", "json", or "csv".

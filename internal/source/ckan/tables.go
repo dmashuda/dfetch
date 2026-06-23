@@ -167,9 +167,10 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 
 	cols := colNames(datasetsCols)
 
-	sent := 0
+	sent, total, truncated := 0, 0, false
 	for start, pages := 0, 0; ; start += rows {
 		if !pushLimit && pages >= maxPages {
+			truncated = start < total // stopped at the cap with more datasets available
 			break
 		}
 		q.Set("rows", strconv.Itoa(rows))
@@ -182,6 +183,7 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 		if !resp.Success {
 			return fmt.Errorf("ckan: package_search returned success=false")
 		}
+		total = resp.Result.Count
 		results := resp.Result.Results
 		if len(results) == 0 {
 			break
@@ -213,6 +215,9 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 			break
 		}
 		pages++
+	}
+	if truncated {
+		return emit(source.Warn("datagov.datasets: returned %d of %d matching datasets (stopped at the %d-page cap); add a narrower q/WHERE or a LIMIT for the rest", sent, total, maxPages))
 	}
 	return nil
 }
@@ -277,6 +282,7 @@ func (c *Connector) scanResources(ctx context.Context, req source.ScanRequest, e
 	}
 	cols := colNames(resourcesCols)
 
+	truncated := false
 	for start, pages := 0, 0; pages < maxPages; start, pages = start+defaultRows, pages+1 {
 		q.Set("rows", strconv.Itoa(defaultRows))
 		q.Set("start", strconv.Itoa(start))
@@ -311,6 +317,12 @@ func (c *Connector) scanResources(ctx context.Context, req source.ScanRequest, e
 		if start+len(results) >= resp.Result.Count {
 			break
 		}
+		if pages+1 >= maxPages {
+			truncated = true // more datasets remain but the next page would exceed the cap
+		}
+	}
+	if truncated {
+		return emit(source.Warn("datagov.resources: stopped at the %d-page cap; results may be incomplete — add a narrower q/WHERE or a LIMIT", maxPages))
 	}
 	return nil
 }
