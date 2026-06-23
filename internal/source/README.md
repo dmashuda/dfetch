@@ -401,9 +401,9 @@ auto-instantiated), so it has no `base_url`-style builtin default.
    order/limit mapping) — copy github/jaeger patterns; only push what's safe.
 5. **Register** in `engine.go` `builtins` (and/or document config usage).
 6. **Test** with `httptest` + testify (see [Testing](#testing)).
-7. **Document**: add the connector to the [Connectors](../../README.md#connectors)
-   section of the top-level README, and a layout line in
-   [CONTRIBUTING.md](../../CONTRIBUTING.md).
+7. **Document**: add the connector to [connectors.md](../../connectors.md) (and an
+   example group in `examples.yaml`, rendered via `make examples`), and a layout
+   line in [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Checklist
 

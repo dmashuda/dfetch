@@ -1,8 +1,9 @@
-// Package examples renders the runnable query examples in examples.yaml into the
-// README's marked example blocks, and is the basis for verifying (examples-check)
-// and running (examples-test) those queries. examples.yaml is the single source of
-// truth; the README blocks between <!-- BEGIN/END EXAMPLES <name> --> markers are
-// generated from it. See tools/examples for the CLI that drives this package.
+// Package examples renders the runnable query examples in examples.yaml into a
+// Markdown doc's marked example blocks (connectors.md), and is the basis for
+// verifying (examples-check) and running (examples-test) those queries.
+// examples.yaml is the single source of truth; the blocks between
+// <!-- BEGIN/END EXAMPLES <name> --> markers are generated from it. See
+// tools/examples for the CLI that drives this package.
 package examples
 
 import (
@@ -89,8 +90,8 @@ func RenderBlock(g Group) string {
 	return "```sh\n" + strings.Join(parts, "\n\n") + "\n```"
 }
 
-// Apply replaces each group's README marker region with its rendered block and
-// returns the updated README. It errors if a group's markers are missing, so a
+// Apply replaces each group's marker region in the doc with its rendered block
+// and returns the updated doc. It errors if a group's markers are missing, so a
 // renamed/typo'd marker fails loudly instead of silently dropping examples.
 func Apply(readme string, f File) (string, error) {
 	for _, g := range f.Groups {
@@ -108,11 +109,11 @@ func replaceBlock(readme, name, block string) (string, error) {
 	end := "<!-- END EXAMPLES " + name + " -->"
 	bi := strings.Index(readme, begin)
 	if bi < 0 {
-		return "", fmt.Errorf("missing marker %q in README", begin)
+		return "", fmt.Errorf("missing marker %q in the examples doc", begin)
 	}
 	ei := strings.Index(readme, end)
 	if ei < 0 {
-		return "", fmt.Errorf("missing marker %q in README", end)
+		return "", fmt.Errorf("missing marker %q in the examples doc", end)
 	}
 	if ei < bi {
 		return "", fmt.Errorf("marker %q appears before %q", end, begin)

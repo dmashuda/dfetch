@@ -25,7 +25,7 @@ internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (A
 internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
-internal/examples       render/check README examples from examples.yaml (tested)
+internal/examples       render/check connectors.md examples from examples.yaml (tested)
 tools/examples          dev CLI behind `make examples`/`examples-check`/`examples-test`
 ```
 
@@ -99,13 +99,14 @@ make coverage   # tests + coverage gate (excludes generated code)
 make lint       # golangci-lint
 make vet        # go vet (excludes generated code)
 make generate   # regenerate the ANTLR parser (requires Java)
-make examples   # regenerate README query examples from examples.yaml
-make examples-check  # offline: fail if the README drifted from examples.yaml
-make examples-test   # run every README example query against live services
+make examples   # regenerate connectors.md query examples from examples.yaml
+make examples-check  # offline: fail if connectors.md drifted from examples.yaml
+make examples-test   # run every example query against live services
 ```
 
-README query examples are generated from `examples.yaml` (see `internal/examples`
-/ `tools/examples`) — edit the YAML, not the README's marked example blocks.
+Connector query examples are generated from `examples.yaml` into `connectors.md`
+(see `internal/examples` / `tools/examples`) — edit the YAML, not the marked
+example blocks. The target doc is the Makefile's `EXAMPLES_DOC` (`connectors.md`).
 
 ## CI
 
