@@ -85,7 +85,9 @@ func TestScanContainers(t *testing.T) {
 }
 
 func TestScanImages(t *testing.T) {
-	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+	var gotPath string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.String()
 		_, _ = w.Write([]byte(`[
 			{"Id":"sha256:img1","ParentId":"","RepoTags":["nginx:latest"],"RepoDigests":["nginx@sha256:dd"],"Created":1699999999,"Size":12345,"SharedSize":-1,"Containers":2,"Labels":null}
 		]`))
@@ -93,6 +95,7 @@ func TestScanImages(t *testing.T) {
 
 	rows, err := collectScan(c, source.ScanRequest{Table: "images"})
 	require.NoError(t, err)
+	assert.Contains(t, gotPath, "shared-size=true") // so SharedSize isn't always -1
 	require.Len(t, rows.Rows, 1)
 	r := rows.Rows[0]
 	assert.Equal(t, "sha256:img1", r[0])
@@ -144,6 +147,21 @@ func TestScanAPIError(t *testing.T) {
 	_, err := collectScan(c, source.ScanRequest{Table: "containers"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "boom")
+}
+
+// An empty resource list must not emit a zero-row chunk (README connector contract).
+func TestScanEmptyListEmitsNothing(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	emitted := 0
+	err := c.Scan(context.Background(), source.ScanRequest{Table: "containers"}, func(*source.Rows) error {
+		emitted++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Zero(t, emitted, "no chunk should be emitted for an empty list")
 }
 
 func TestScanUnknownTable(t *testing.T) {

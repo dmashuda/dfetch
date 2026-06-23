@@ -101,6 +101,9 @@ func (c *Connector) scanContainers(ctx context.Context, emit func(*source.Rows) 
 			x.State, x.Status, toJSON(x.Ports), toJSON(x.Labels), toJSON(x.Mounts),
 		}
 	}
+	if len(rows) == 0 {
+		return nil
+	}
 	return emit(&source.Rows{Columns: colNames(containersCols), Rows: rows})
 }
 
@@ -120,7 +123,8 @@ type apiImage struct {
 
 func (c *Connector) scanImages(ctx context.Context, emit func(*source.Rows) error) error {
 	var imgs []apiImage
-	if err := c.getJSON(ctx, "/images/json", &imgs); err != nil {
+	// shared-size=true populates SharedSize; without it Docker returns -1 for every image.
+	if err := c.getJSON(ctx, "/images/json?shared-size=true", &imgs); err != nil {
 		return err
 	}
 	rows := make([][]any, len(imgs))
@@ -129,6 +133,9 @@ func (c *Connector) scanImages(ctx context.Context, emit func(*source.Rows) erro
 			x.ID, x.ParentID, toJSON(x.RepoTags), toJSON(x.RepoDigests),
 			x.Created, x.Size, x.SharedSize, x.Containers, toJSON(x.Labels),
 		}
+	}
+	if len(rows) == 0 {
+		return nil
 	}
 	return emit(&source.Rows{Columns: colNames(imagesCols), Rows: rows})
 }
@@ -160,6 +167,9 @@ func (c *Connector) scanVolumes(ctx context.Context, emit func(*source.Rows) err
 			toJSON(x.Labels), toJSON(x.Options),
 		}
 	}
+	if len(rows) == 0 {
+		return nil
+	}
 	return emit(&source.Rows{Columns: colNames(volumesCols), Rows: rows})
 }
 
@@ -190,6 +200,9 @@ func (c *Connector) scanNetworks(ctx context.Context, emit func(*source.Rows) er
 			boolInt(x.Internal), boolInt(x.Attachable),
 			toJSON(x.IPAM), toJSON(x.Labels), toJSON(x.Options),
 		}
+	}
+	if len(rows) == 0 {
+		return nil
 	}
 	return emit(&source.Rows{Columns: colNames(networksCols), Rows: rows})
 }
