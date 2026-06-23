@@ -32,6 +32,33 @@ func TestPlanUnboundParamNotPushed(t *testing.T) {
 	assert.Empty(t, req.Filters)
 }
 
+// SQLite accepts @name and $name bind syntaxes in addition to :name; the parser
+// stores the sigil in the token, so the planner must strip any of them to match
+// a param key. A bound-but-nil value and unnamed positional binds are not pushed.
+func TestPlanResolvesBindSigils(t *testing.T) {
+	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}}}
+	want := []source.Filter{{Column: "owner", Op: sqlparse.OpEq, Value: "golang"}}
+
+	for _, sigil := range []string{"@", "$"} {
+		q, err := sqlparse.Parse("SELECT * FROM github.issues WHERE owner = " + sigil + "owner")
+		require.NoError(t, err)
+		req := planScan(q.Stmt, q.Stmt.From[0], ts, map[string]any{"owner": "golang"})
+		assert.Equal(t, want, req.Filters, "sigil %q should resolve", sigil)
+	}
+
+	// A param present in the map but nil is left for SQLite, not pushed.
+	q, err := sqlparse.Parse("SELECT * FROM github.issues WHERE owner = :owner")
+	require.NoError(t, err)
+	req := planScan(q.Stmt, q.Stmt.From[0], ts, map[string]any{"owner": nil})
+	assert.Empty(t, req.Filters)
+
+	// A positional ? bind has no name and is never pushed.
+	q, err = sqlparse.Parse("SELECT * FROM github.issues WHERE owner = ?")
+	require.NoError(t, err)
+	req = planScan(q.Stmt, q.Stmt.From[0], ts, map[string]any{"owner": "golang"})
+	assert.Empty(t, req.Filters)
+}
+
 func planFor(t *testing.T, sql string) source.ScanRequest {
 	t.Helper()
 	q, err := sqlparse.Parse(sql)

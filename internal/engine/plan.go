@@ -390,7 +390,7 @@ func toFilter(p sqlparse.Predicate, params map[string]any) (source.Filter, bool)
 }
 
 // resolveValue returns the Go value of a pushable value: a literal's parsed
-// value, or — for a bind parameter (:name) — the matching entry in params. It
+// value, or — for a named bind parameter — the matching entry in params. It
 // reports false for unbound parameters or non-constant expressions, which are
 // left for the local SQLite engine to apply.
 func resolveValue(v *sqlparse.Value, params map[string]any) (any, bool) {
@@ -404,9 +404,16 @@ func resolveValue(v *sqlparse.Value, params map[string]any) (any, bool) {
 		}
 		return v.Literal.Value, true
 	case sqlparse.ValueBind:
-		name := strings.TrimPrefix(v.Bind, ":")
+		// Bind tokens carry their sigil (:name, @name, $name); params are keyed
+		// by the bare name. Positional binds (?, ?NNN) have no name and never
+		// match. A bound-but-nil value is left for SQLite rather than pushed as
+		// a nil-valued filter.
+		name := strings.TrimLeft(v.Bind, ":@$")
 		val, ok := params[name]
-		return val, ok
+		if !ok || val == nil {
+			return nil, false
+		}
+		return val, true
 	default:
 		return nil, false
 	}
