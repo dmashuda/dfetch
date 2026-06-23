@@ -9,6 +9,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestPlanResolvesBindParam verifies a :name bind RHS is resolved against the
+// params map and pushed to the connector as a literal-valued filter (so sources
+// that require a filter value at fetch time receive a saved query's argument).
+func TestPlanResolvesBindParam(t *testing.T) {
+	q, err := sqlparse.Parse("SELECT * FROM github.issues WHERE owner = :owner")
+	require.NoError(t, err)
+	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}}}
+
+	req := planScan(q.Stmt, q.Stmt.From[0], ts, map[string]any{"owner": "golang"})
+	assert.Equal(t, []source.Filter{{Column: "owner", Op: sqlparse.OpEq, Value: "golang"}}, req.Filters)
+}
+
+// An unbound parameter is not pushable: it is left for the local SQLite engine
+// (which will error on the missing bind), never sent as an empty filter.
+func TestPlanUnboundParamNotPushed(t *testing.T) {
+	q, err := sqlparse.Parse("SELECT * FROM github.issues WHERE owner = :owner")
+	require.NoError(t, err)
+	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}}}
+
+	req := planScan(q.Stmt, q.Stmt.From[0], ts, nil)
+	assert.Empty(t, req.Filters)
+}
+
 func planFor(t *testing.T, sql string) source.ScanRequest {
 	t.Helper()
 	q, err := sqlparse.Parse(sql)
@@ -18,7 +41,7 @@ func planFor(t *testing.T, sql string) source.ScanRequest {
 	ts := source.TableSchema{Name: src.Name, Columns: []source.Column{
 		{Name: "owner"}, {Name: "repo"}, {Name: "state"}, {Name: "updated_at"}, {Name: "comments"},
 	}}
-	return planScan(q.Stmt, src, ts)
+	return planScan(q.Stmt, src, ts, nil)
 }
 
 // planForJoin plans the scan for the source at fromIdx, giving it a table schema
@@ -33,7 +56,7 @@ func planForJoin(t *testing.T, sql string, fromIdx int, cols ...string) source.S
 	for i, c := range cols {
 		columns[i] = source.Column{Name: c}
 	}
-	return planScan(q.Stmt, src, source.TableSchema{Name: src.Name, Columns: columns})
+	return planScan(q.Stmt, src, source.TableSchema{Name: src.Name, Columns: columns}, nil)
 }
 
 // The driving table of an FK/dimension-lookup join (every other source pinned to
@@ -186,7 +209,7 @@ func TestPlanScanLimitNotPushedForMultiSource(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}, {Name: "repo"}}}
-	req := planScan(q.Stmt, q.Stmt.From[0], ts)
+	req := planScan(q.Stmt, q.Stmt.From[0], ts, nil)
 	assert.Nil(t, req.Limit, "LIMIT must not be pushed to one source of a multi-source query")
 }
 
@@ -204,7 +227,7 @@ func TestPlanScanInfersJoinPartnerFilters(t *testing.T) {
 	require.Equal(t, "repos", reposSrc.Name)
 	reposTS := source.TableSchema{Name: "repos", Columns: []source.Column{{Name: "owner"}, {Name: "name"}, {Name: "full_name"}}}
 
-	req := planScan(q.Stmt, reposSrc, reposTS)
+	req := planScan(q.Stmt, reposSrc, reposTS, nil)
 	assert.ElementsMatch(t, []source.Filter{
 		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
 		{Column: "name", Op: sqlparse.OpEq, Value: "go"},
@@ -219,7 +242,7 @@ func TestPlanScanInferenceDoesNotDuplicateDirectFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	reposTS := source.TableSchema{Name: "repos", Columns: []source.Column{{Name: "name"}}}
-	req := planScan(q.Stmt, q.Stmt.From[1], reposTS)
+	req := planScan(q.Stmt, q.Stmt.From[1], reposTS, nil)
 	// Only one filter on name, even though it's both direct and inferable.
 	assert.Len(t, req.Filters, 1)
 }
@@ -228,6 +251,6 @@ func TestPlanScanQualifiedColumnAttribution(t *testing.T) {
 	q, err := sqlparse.Parse("SELECT * FROM github.issues i WHERE i.owner = 'golang' AND i.state = 'open'")
 	require.NoError(t, err)
 	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}, {Name: "state"}}}
-	req := planScan(q.Stmt, q.Stmt.From[0], ts)
+	req := planScan(q.Stmt, q.Stmt.From[0], ts, nil)
 	assert.Len(t, req.Filters, 2)
 }

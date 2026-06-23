@@ -88,7 +88,9 @@ func engineWith(conns map[string]source.Connector) *Engine {
 
 // TestRunWithParamsBindsNamedParam end-to-ends a saved-query bind: a :title
 // parameter flows through parse, load, and the final SQLite query, filtering to
-// the matching row. Bind params are values, so they don't push down as filters.
+// the matching row. The bound value is also resolved during planning and pushed
+// to the connector as a filter, so sources that require a filter value at fetch
+// time still receive it.
 func TestRunWithParamsBindsNamedParam(t *testing.T) {
 	conn := issuesConn()
 	e := engineWith(map[string]source.Connector{"github": conn})
@@ -98,6 +100,11 @@ func TestRunWithParamsBindsNamedParam(t *testing.T) {
 		map[string]any{"title": "b"})
 	require.NoError(t, err)
 
+	// The bound value reached the connector as a pushed-down filter.
+	assert.Contains(t, conn.got.Filters,
+		source.Filter{Column: "title", Op: sqlparse.OpEq, Value: "b"})
+
+	// And the final result is filtered to the matching row.
 	require.Len(t, res.Rows, 1)
 	assert.Equal(t, int64(2), res.Rows[0][0])
 	assert.Equal(t, "b", res.Rows[0][1])
