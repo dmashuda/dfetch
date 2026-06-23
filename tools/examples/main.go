@@ -1,7 +1,8 @@
-// Command examples drives internal/examples: it regenerates the README example
-// blocks from examples.yaml (-mode gen), verifies they're in sync (-mode check),
-// or runs every example query against the live services (-mode run). It is a dev
-// tool, not part of the dfetch binary; invoke it via the `make examples*` targets.
+// Command examples drives internal/examples: it regenerates the example blocks in
+// a Markdown doc (connectors.md) from examples.yaml (-mode gen), verifies they're
+// in sync (-mode check), or runs every example query against the live services
+// (-mode run). It is a dev tool, not part of the dfetch binary; invoke it via the
+// `make examples*` targets.
 package main
 
 import (
@@ -19,7 +20,7 @@ import (
 func main() {
 	mode := flag.String("mode", "gen", "gen | check | run")
 	yamlPath := flag.String("yaml", "examples.yaml", "path to examples.yaml")
-	readmePath := flag.String("readme", "README.md", "path to README.md")
+	readmePath := flag.String("readme", "README.md", "path to the Markdown doc holding the example blocks")
 	bin := flag.String("bin", "./bin/dfetch", "dfetch binary for -mode run")
 	jaegerURL := flag.String("jaeger", "http://localhost:16686", "Jaeger base URL probed for -mode run")
 	flag.Parse()
@@ -34,12 +35,12 @@ func main() {
 		if err := generate(*readmePath, f); err != nil {
 			fatal(err)
 		}
-		fmt.Printf("regenerated README example blocks from %s\n", *yamlPath)
+		fmt.Printf("regenerated %s example blocks from %s\n", *readmePath, *yamlPath)
 	case "check":
 		if err := check(*readmePath, f); err != nil {
 			fatal(err)
 		}
-		fmt.Println("README examples are in sync with " + *yamlPath)
+		fmt.Println(*readmePath + " examples are in sync with " + *yamlPath)
 	case "run":
 		os.Exit(runAll(f, *bin, *jaegerURL))
 	default:
