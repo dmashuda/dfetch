@@ -26,15 +26,16 @@ queries:
       ORDER BY start_time DESC
       LIMIT 50
 
-  # Every span in a trace, in start order.
-  # e.g. dfetch run trace-spans 4f8e2a1b...
+  # Every span in a trace, in start order. SELECT * so --all-columns exposes every
+  # span property, including the `attributes` (tags) JSON column; the default view
+  # narrows to the readable columns below.
+  # e.g. dfetch run trace-spans 4f8e2a1b...   (add --all-columns for tags)
   - name: trace-spans
     description: All spans for a trace
     params: [trace_id]
     columns: [start_time, service_name, operation_name, duration_ms, status_code]
     sql: |
-      SELECT start_time, service_name, operation_name, duration_ms,
-             status_code, status_message, span_id, parent_span_id
+      SELECT *
       FROM jaeger.spans
       WHERE trace_id = :trace_id
       ORDER BY start_time
