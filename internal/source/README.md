@@ -281,8 +281,9 @@ Builtins are constructed with `factory(nil)`, so `New` must work with `nil`
 params and sensible defaults.
 
 **Config** — a user binds any registered connector `type` to a schema `name` in
-`~/.dfetch/config.yaml` (`internal/config`). This can add new schemas or override
-a builtin, and lets one connector type serve several hosts:
+`dfetch.yaml` (`./dfetch.yaml`, falling back to `~/dfetch.yaml`; see
+`internal/config`). This can add new schemas or override a builtin, and lets one
+connector type serve several hosts:
 
 ```yaml
 sources:

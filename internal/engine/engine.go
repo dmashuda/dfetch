@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -141,12 +142,26 @@ func (e *Engine) DescribeTable(ctx context.Context, schema, table string) (sourc
 }
 
 // Run executes the full pipeline for a SQL query (SQLite syntax).
-func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
+func (e *Engine) Run(ctx context.Context, query string) (*Result, error) {
+	return e.RunWithParams(ctx, query, nil)
+}
+
+// RunWithParams executes the full pipeline for a SQL query (SQLite syntax),
+// binding params as named SQLite parameters (referenced as :name in the SQL).
+// A nil or empty params map runs the query with no bound parameters.
+//
+// The params are also handed to the push-down planner: the planner resolves a
+// bind-parameter RHS (e.g. `service_name = :service`) to its value so the filter
+// can be pushed to the connector, while the final query keeps the :name bind for
+// SQLite. Without this, connectors that require a filter value at fetch time
+// (jaeger.spans needs service_name or trace_id, github.pulls needs owner/repo)
+// would never see the value, since a bind is opaque until SQLite executes.
+func (e *Engine) RunWithParams(ctx context.Context, query string, params map[string]any) (*Result, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "engine.Run",
-		trace.WithAttributes(semconv.DBQueryText(sql)))
+		trace.WithAttributes(semconv.DBQueryText(query)))
 	defer span.End()
 
-	q, err := parseQuery(ctx, sql)
+	q, err := parseQuery(ctx, query)
 	if err != nil {
 		return nil, recordErr(span, err)
 	}
@@ -173,15 +188,29 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 	}
 
 	// Stream each source's pages concurrently, loading every chunk as it arrives.
-	if err := e.streamSources(ctx, db, q.Stmt, resolved); err != nil {
+	if err := e.streamSources(ctx, db, q.Stmt, resolved, params); err != nil {
 		return nil, recordErr(span, err)
 	}
 
-	res, err := db.Query(ctx, q.Raw)
+	res, err := db.Query(ctx, q.Raw, namedArgs(params)...)
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("resolving query: %w", err))
 	}
 	return &Result{Columns: res.Columns, Rows: res.Rows}, nil
+}
+
+// namedArgs converts a params map into sql.Named bind arguments. The order is
+// irrelevant: named parameters bind by name, not position. Returns nil for an
+// empty map so Query is called with no extra args.
+func namedArgs(params map[string]any) []any {
+	if len(params) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(params))
+	for name, val := range params {
+		args = append(args, sql.Named(name, val))
+	}
+	return args
 }
 
 // parseQuery parses sql inside its own "engine.parse" span, annotated with what
@@ -258,7 +287,7 @@ func (e *Engine) resolveSources(ctx context.Context, sources []sqlparse.Source) 
 // into the local database as it arrives. Chunk inserts are serialized with mu
 // because localdb runs on a single pinned connection. The first error cancels the
 // remaining scans.
-func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, resolved []resolvedSource) error {
+func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, resolved []resolvedSource, params map[string]any) error {
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrentFetches)
@@ -274,7 +303,7 @@ func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlpar
 				))
 			defer scanSpan.End()
 
-			err := r.conn.Scan(scanCtx, planScan(stmt, r.src, r.ts), func(chunk *source.Rows) error {
+			err := r.conn.Scan(scanCtx, planScan(stmt, r.src, r.ts, params), func(chunk *source.Rows) error {
 				mu.Lock()
 				defer mu.Unlock()
 				return db.Insert(scanCtx, r.src.Schema, r.src.Name, chunk.Columns, chunk.Rows)

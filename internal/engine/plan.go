@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
@@ -12,7 +13,7 @@ import (
 // OFFSET when it is safe to push (single-source query). The connector decides
 // what it can actually honor; the local SQLite re-applies the full query, so an
 // over-broad result is always corrected.
-func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema) source.ScanRequest {
+func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema, params map[string]any) source.ScanRequest {
 	req := source.ScanRequest{Table: src.Name}
 	single := len(collectSources(stmt)) == 1
 	cols := columnSet(ts)
@@ -22,7 +23,7 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 		if !attributable(p.Table, src, single) || !cols[p.Column] {
 			continue
 		}
-		if f, ok := toFilter(p); ok {
+		if f, ok := toFilter(p, params); ok {
 			req.Filters = append(req.Filters, f)
 			have[p.Column] = true
 		}
@@ -31,7 +32,7 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema)
 	// Infer equality filters across equi-joins: if this source's column is joined
 	// to another column that has a literal equality filter, that literal also
 	// applies here (e.g. `r.name = i.repo` + `i.repo = 'go'` ⇒ `r.name = 'go'`).
-	req.Filters = append(req.Filters, inferJoinFilters(stmt, src, cols, have)...)
+	req.Filters = append(req.Filters, inferJoinFilters(stmt, src, cols, have, params)...)
 
 	for _, o := range stmt.OrderBy {
 		if o.Column == "" || !attributable(o.Table, src, single) || !cols[o.Column] {
@@ -263,7 +264,7 @@ type colRef struct{ table, column string }
 // is a column of src and the other side has a literal `= value` filter, the
 // value is pushed to src too. have records src columns that already carry a
 // filter, so inference never duplicates one.
-func inferJoinFilters(stmt *sqlparse.Select, src sqlparse.Source, cols, have map[string]bool) []source.Filter {
+func inferJoinFilters(stmt *sqlparse.Select, src sqlparse.Source, cols, have map[string]bool, params map[string]any) []source.Filter {
 	literals := literalEqualities(stmt)
 	pairs := equiJoinPairs(stmt)
 
@@ -276,7 +277,7 @@ func inferJoinFilters(stmt *sqlparse.Select, src sqlparse.Source, cols, have map
 		if have[column] {
 			return
 		}
-		val, ok := literalValue(v)
+		val, ok := resolveValue(v, params)
 		if !ok {
 			return
 		}
@@ -360,16 +361,19 @@ func columnSet(ts source.TableSchema) map[string]bool {
 	return set
 }
 
-// toFilter converts a structured predicate with literal values into a Filter.
-// Bind parameters and unstructured predicates are not pushable.
-func toFilter(p sqlparse.Predicate) (source.Filter, bool) {
+// toFilter converts a structured predicate into a Filter, resolving its value
+// against params. A literal RHS uses its parsed value; a bind parameter (:name)
+// resolves to params[name], so a saved query's bound argument can be pushed down
+// to the connector. Unstructured predicates and unbound parameters are not
+// pushable.
+func toFilter(p sqlparse.Predicate, params map[string]any) (source.Filter, bool) {
 	switch p.Op {
 	case sqlparse.OpNone, sqlparse.OpIsNull, sqlparse.OpIsNotNull:
 		return source.Filter{}, false
 	case sqlparse.OpIn, sqlparse.OpNotIn, sqlparse.OpBetween, sqlparse.OpNotBetween:
 		vals := make([]any, 0, len(p.Values))
 		for i := range p.Values {
-			v, ok := literalValue(&p.Values[i])
+			v, ok := resolveValue(&p.Values[i], params)
 			if !ok {
 				return source.Filter{}, false
 			}
@@ -377,7 +381,7 @@ func toFilter(p sqlparse.Predicate) (source.Filter, bool) {
 		}
 		return source.Filter{Column: p.Column, Op: p.Op, Values: vals}, true
 	default:
-		v, ok := literalValue(p.Value)
+		v, ok := resolveValue(p.Value, params)
 		if !ok {
 			return source.Filter{}, false
 		}
@@ -385,12 +389,34 @@ func toFilter(p sqlparse.Predicate) (source.Filter, bool) {
 	}
 }
 
-// literalValue returns the Go value of a literal (non-bind) value.
-func literalValue(v *sqlparse.Value) (any, bool) {
-	if v == nil || v.Kind != sqlparse.ValueLiteral || v.Literal == nil {
+// resolveValue returns the Go value of a pushable value: a literal's parsed
+// value, or — for a named bind parameter — the matching entry in params. It
+// reports false for unbound parameters or non-constant expressions, which are
+// left for the local SQLite engine to apply.
+func resolveValue(v *sqlparse.Value, params map[string]any) (any, bool) {
+	if v == nil {
 		return nil, false
 	}
-	return v.Literal.Value, true
+	switch v.Kind {
+	case sqlparse.ValueLiteral:
+		if v.Literal == nil {
+			return nil, false
+		}
+		return v.Literal.Value, true
+	case sqlparse.ValueBind:
+		// Bind tokens carry their sigil (:name, @name, $name); params are keyed
+		// by the bare name. Positional binds (?, ?NNN) have no name and never
+		// match. A bound-but-nil value is left for SQLite rather than pushed as
+		// a nil-valued filter.
+		name := strings.TrimLeft(v.Bind, ":@$")
+		val, ok := params[name]
+		if !ok || val == nil {
+			return nil, false
+		}
+		return val, true
+	default:
+		return nil, false
+	}
 }
 
 // intValue extracts an int from an integer-literal value.

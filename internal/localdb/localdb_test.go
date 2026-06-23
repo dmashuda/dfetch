@@ -2,6 +2,7 @@ package localdb
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"testing"
 
@@ -95,6 +96,28 @@ func TestCreateInsertQuery(t *testing.T) {
 	require.Len(t, res.Rows, 1)
 	assert.Equal(t, int64(1), res.Rows[0][0])
 	assert.Equal(t, "first", res.Rows[0][1])
+}
+
+// TestQueryNamedBindParam confirms named bind parameters (:name) reach the
+// driver and filter rows, the mechanism saved queries use to bind their args.
+func TestQueryNamedBindParam(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	ts := issuesSchema()
+	require.NoError(t, db.CreateTable(ctx, "", ts))
+	require.NoError(t, db.Insert(ctx, "", ts.Name, ts.ColumnNames(), [][]any{
+		{int64(1), "first", "open"},
+		{int64(2), "second", "closed"},
+	}))
+
+	res, err := db.Query(ctx,
+		"SELECT number, title FROM issues WHERE state = :state ORDER BY number",
+		sql.Named("state", "closed"))
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, int64(2), res.Rows[0][0])
+	assert.Equal(t, "second", res.Rows[0][1])
 }
 
 // TestAttachedSchemaQualifiedTable is the core engine scenario: a schema-

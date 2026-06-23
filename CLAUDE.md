@@ -12,7 +12,8 @@ into a per-request local SQLite database, and resolves the query against it.
 
 ```
 cmd/                    cobra CLI: root, query, tables, version
-internal/config         YAML config loading (schema -> connector)
+internal/config         YAML config loading (schema -> connector; saved queries)
+                        loaded from ./dfetch.yaml, falling back to ~/dfetch.yaml
 internal/source         Connector interface + ScanRequest (push-down) + registry
                         (see internal/source/README.md to add a new connector)
 internal/source/github  GitHub connector (issues/pulls/repos/commits/releases/workflow_runs/artifacts), stdlib net/http
