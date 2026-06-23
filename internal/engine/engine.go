@@ -16,6 +16,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/localdb"
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/source/ckan"
+	"github.com/dmashuda/dfetch/internal/source/docker"
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/source/jaeger"
 	"github.com/dmashuda/dfetch/internal/source/postgres"
@@ -38,6 +39,7 @@ type Engine struct {
 // auto-instantiated under its own name as a schema (so New(nil) must work).
 var builtins = map[string]source.Factory{
 	"datagov": ckan.New,
+	"docker":  docker.New,
 	"github":  github.New,
 	"jaeger":  jaeger.New,
 }

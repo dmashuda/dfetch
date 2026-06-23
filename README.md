@@ -68,7 +68,7 @@ in the current directory, falling back to `~/dfetch.yaml` (see
 
 ## Connectors
 
-Three connectors are built in and need no configuration. To point one at a
+Four connectors are built in and need no configuration. To point one at a
 non-default host (e.g. an enterprise or remote instance), or to register the same
 connector under several schemas, see [Configuration](#configuration).
 
@@ -241,6 +241,38 @@ Notes:
   `api.gsa.gov` gateway; the default `base_url` (`catalog-old.data.gov`) still
   serves the standard API. To use the gateway, set `base_url`,
   `action_path: /v3/action`, and an `api_key` (e.g. `DEMO_KEY`) in config.
+
+### Docker — schema `docker`
+
+Backed by the Docker Engine API over the local daemon socket
+(`/var/run/docker.sock`) — no configuration or token needed.
+
+| table | rows |
+| --- | --- |
+| `docker.containers` | all containers (running and stopped) |
+| `docker.images` | images on the host |
+| `docker.volumes` | volumes |
+| `docker.networks` | networks |
+
+Column names mirror the API fields (`image`, `state`, `created`, …). Nested data
+(`ports`, `labels`, `mounts`, `repo_tags`, `ipam`, `options`, …) is stored as a
+JSON string column — query it with SQLite's `json_extract`. There are no required
+filters and no push-down: each scan fetches the full list and SQLite applies the
+query. To point at a non-default socket use the `socket` param, or `base_url` for
+a plaintext TCP daemon.
+
+```sh
+# running containers and their compose project
+dfetch query "SELECT name, image,
+              json_extract(labels,'\$.\"com.docker.compose.project\"') AS project
+              FROM docker.containers
+              WHERE state='running' ORDER BY name"
+
+# largest images by size
+dfetch query "SELECT json_extract(repo_tags,'\$[0]') AS tag, size
+              FROM docker.images
+              WHERE tag IS NOT NULL ORDER BY size DESC LIMIT 10"
+```
 
 ### PostgreSQL — connector type `postgres`
 
