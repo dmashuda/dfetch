@@ -232,7 +232,25 @@ func TestScanSpansDefaultWindowWarning(t *testing.T) {
 	assert.Contains(t, res.Warnings[0], "start_time")
 }
 
-// With an explicit start_time filter, no default-window warning is emitted.
+// An upper-bound-only start_time filter still leaves the lower bound defaulted to
+// a window, so the warning must fire (the connector silently searched only 1h).
+func TestScanSpansUpperBoundOnlyWarns(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	res, err := collectScan(c, source.ScanRequest{
+		Table: "spans",
+		Filters: []source.Filter{
+			eqFilter("service_name", "dfetch"),
+			{Column: "start_time", Op: sqlparse.OpLt, Value: "2026-01-01T00:00:00Z"},
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], "start_time")
+}
+
+// With an explicit lower start_time bound, no default-window warning is emitted.
 func TestScanSpansWithStartTimeNoWindowWarning(t *testing.T) {
 	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(oneTrace))

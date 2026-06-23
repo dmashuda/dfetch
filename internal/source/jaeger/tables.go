@@ -150,8 +150,8 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 	if err := c.streamTraces(ctx, c.baseURL+"/api/v3/traces?"+q.Encode(), counting); err != nil {
 		return err
 	}
-	if !hasStartTimeFilter(req) {
-		if err := emit(source.Warn("jaeger.spans: no start_time filter; searched only the default recent window (%s) — add a start_time filter to widen", defaultWindow)); err != nil {
+	if !hasStartTimeLowerBound(req) {
+		if err := emit(source.Warn("jaeger.spans: searched only a default %s time window (no lower start_time bound) — add a start_time >= filter to widen", defaultWindow)); err != nil {
 			return err
 		}
 	}

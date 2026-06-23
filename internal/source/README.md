@@ -259,7 +259,10 @@ streaming reduces peak memory and overlaps network with local inserts.
   `Columns` consistent across chunks (the engine uses the first chunk's columns).
 - If `emit` returns an error, stop and propagate it (the engine is cancelling —
   e.g. another source failed).
-- Skip empty chunks (don't emit a `Rows` with zero rows).
+- Skip empty chunks (don't emit a `Rows` with zero rows) — the one exception is a
+  warning-only chunk from `source.Warn(...)`, which carries `Warnings` and no rows
+  to tell the user the result may be incomplete (e.g. a pagination/result cap was
+  hit). The engine collects its `Warnings` and skips the (no-op) insert.
 - Thread `ctx` into every outbound call for cancellation and tracing.
 
 ## Registration and configuration

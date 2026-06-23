@@ -316,6 +316,9 @@ func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlpar
 						scanSpan.AddEvent("result.truncated", trace.WithAttributes(attribute.String("warning", w)))
 					}
 				}
+				if len(chunk.Rows) == 0 {
+					return nil // warning-only or empty chunk: nothing to insert
+				}
 				return db.Insert(scanCtx, r.src.Schema, r.src.Name, chunk.Columns, chunk.Rows)
 			})
 			if err != nil {
