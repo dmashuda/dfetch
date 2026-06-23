@@ -14,6 +14,45 @@ type Result struct {
 	Rows    [][]any
 }
 
+// Project returns a copy of the result narrowed to cols, in the given order.
+// An empty cols list returns the result unchanged (all columns). It errors if a
+// requested column is not present, listing the columns that are available, so a
+// stale saved-query projection fails loudly rather than silently dropping data.
+func (r *Result) Project(cols []string) (*Result, error) {
+	if len(cols) == 0 {
+		return r, nil
+	}
+
+	idx := make(map[string]int, len(r.Columns))
+	for i, c := range r.Columns {
+		idx[c] = i
+	}
+
+	picks := make([]int, len(cols))
+	for i, c := range cols {
+		j, ok := idx[c]
+		if !ok {
+			return nil, fmt.Errorf("column %q not in result; available: %s", c, strings.Join(r.Columns, ", "))
+		}
+		picks[i] = j
+	}
+
+	rows := make([][]any, len(r.Rows))
+	for i, row := range r.Rows {
+		out := make([]any, len(picks))
+		for k, j := range picks {
+			if j < len(row) {
+				out[k] = row[j]
+			}
+		}
+		rows[i] = out
+	}
+
+	projected := make([]string, len(cols))
+	copy(projected, cols)
+	return &Result{Columns: projected, Rows: rows}, nil
+}
+
 // Write renders the result to w in the requested format: "table", "json", or "csv".
 func (r *Result) Write(w io.Writer, format string) error {
 	switch format {

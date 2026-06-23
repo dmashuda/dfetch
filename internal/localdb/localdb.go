@@ -163,9 +163,10 @@ func (db *DB) Insert(ctx context.Context, schema, table string, cols []string, r
 }
 
 // Query runs the resolved SQL against the local database and returns the rows,
-// with []byte values normalized to strings.
-func (db *DB) Query(ctx context.Context, query string) (*Result, error) {
-	rows, err := db.conn.QueryContext(ctx, query)
+// with []byte values normalized to strings. Optional args are bound as query
+// parameters (e.g. sql.Named for :name binds).
+func (db *DB) Query(ctx context.Context, query string, args ...any) (*Result, error) {
+	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

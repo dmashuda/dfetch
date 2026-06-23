@@ -57,11 +57,14 @@ superset of the rows.
 | command | description |
 | --- | --- |
 | `dfetch query "<sql>"` | Run a SQL query. `--format table\|json\|csv` (default `table`). |
+| `dfetch run <name> [args...]` | Run a saved query, binding args to its params. `--all-columns`, `--format`. |
+| `dfetch queries` | List saved queries with their parameters and descriptions. |
 | `dfetch tables [schema]` | List available tables and columns, optionally for one schema. |
 | `dfetch version` | Print the version. |
 
-`--config <path>` (global) points at a config file; the default is
-`~/.dfetch/config.yaml` (see [Configuration](#configuration)).
+`--config <path>` (global) points at a config file; the default is `./dfetch.yaml`
+in the current directory, falling back to `~/dfetch.yaml` (see
+[Configuration](#configuration)).
 
 ## Connectors
 
@@ -277,8 +280,10 @@ which can lose precision on very large exact values).
 ## Configuration
 
 dfetch works with no config. To point a connector at a non-default host, or to
-register a connector under additional schemas, create `~/.dfetch/config.yaml`
-(or pass `--config <path>`). Each entry binds a SQL schema `name` to a connector
+register a connector under additional schemas, create a `dfetch.yaml` in the
+directory you run dfetch from — config is per-project. dfetch looks for
+`./dfetch.yaml` first and falls back to `~/dfetch.yaml`; `--config <path>`
+overrides both. Each `sources` entry binds a SQL schema `name` to a connector
 `type`, with connector-specific `params`:
 
 ```yaml
@@ -292,6 +297,32 @@ sources:
     params:
       base_url: http://jaeger.example.com:16686
 ```
+
+### Saved queries
+
+Add a `queries` list to store reusable, parameterized queries. Each query has a
+`name` (used by `dfetch run`), an optional `description`, an ordered list of
+`params` bound as `:name` placeholders in the `sql`, and an optional `columns`
+list selecting the default output columns:
+
+```yaml
+queries:
+  - name: fetch-trace
+    description: Spans for a trace
+    params: [trace_id]               # bound positionally: dfetch run fetch-trace <trace_id>
+    columns: [trace_id, name, duration]
+    sql: SELECT * FROM prod-traces.spans WHERE trace_id = :trace_id
+```
+
+```sh
+dfetch queries                       # list saved queries
+dfetch run fetch-trace abc123        # binds :trace_id = abc123, shows the columns above
+dfetch run fetch-trace abc123 --all-columns   # show every column the query produces
+```
+
+Positional arguments bind to `params` in order. Parameters are SQLite bind
+values, so they substitute values (not table or column names). When `columns` is
+set, output is narrowed to those columns unless `--all-columns` is passed.
 
 ## Tracing
 

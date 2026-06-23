@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -141,12 +142,19 @@ func (e *Engine) DescribeTable(ctx context.Context, schema, table string) (sourc
 }
 
 // Run executes the full pipeline for a SQL query (SQLite syntax).
-func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
+func (e *Engine) Run(ctx context.Context, query string) (*Result, error) {
+	return e.RunWithParams(ctx, query, nil)
+}
+
+// RunWithParams executes the full pipeline for a SQL query (SQLite syntax),
+// binding params as named SQLite parameters (referenced as :name in the SQL).
+// A nil or empty params map runs the query with no bound parameters.
+func (e *Engine) RunWithParams(ctx context.Context, query string, params map[string]any) (*Result, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "engine.Run",
-		trace.WithAttributes(semconv.DBQueryText(sql)))
+		trace.WithAttributes(semconv.DBQueryText(query)))
 	defer span.End()
 
-	q, err := parseQuery(ctx, sql)
+	q, err := parseQuery(ctx, query)
 	if err != nil {
 		return nil, recordErr(span, err)
 	}
@@ -177,11 +185,25 @@ func (e *Engine) Run(ctx context.Context, sql string) (*Result, error) {
 		return nil, recordErr(span, err)
 	}
 
-	res, err := db.Query(ctx, q.Raw)
+	res, err := db.Query(ctx, q.Raw, namedArgs(params)...)
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("resolving query: %w", err))
 	}
 	return &Result{Columns: res.Columns, Rows: res.Rows}, nil
+}
+
+// namedArgs converts a params map into sql.Named bind arguments. The order is
+// irrelevant: named parameters bind by name, not position. Returns nil for an
+// empty map so Query is called with no extra args.
+func namedArgs(params map[string]any) []any {
+	if len(params) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(params))
+	for name, val := range params {
+		args = append(args, sql.Named(name, val))
+	}
+	return args
 }
 
 // parseQuery parses sql inside its own "engine.parse" span, annotated with what
