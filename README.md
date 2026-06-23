@@ -66,6 +66,53 @@ superset of the rows.
 in the current directory, falling back to `~/dfetch.yaml` (see
 [Configuration](#configuration)).
 
+## How a query runs
+
+A query flows through four stages: parse the SQL, resolve and prepare a
+per-request local SQLite database, fetch every referenced source concurrently and
+load it as it arrives, then run the original SQL **verbatim** against SQLite (the
+source of truth — connectors may return a superset, which SQLite trims).
+
+```mermaid
+flowchart TD
+    CLI["CLI: dfetch query / run"] --> RUN["engine.RunWithParams(ctx, sql, params)"]
+
+    subgraph s1["1 - Parse and validate"]
+        RUN --> PARSE["parseQuery -> sqlparse.Parse<br/>ANTLR, read-only SELECT only"]
+        PARSE --> AST["Query: Raw SQL string + Stmt (AST)"]
+    end
+
+    subgraph s2["2 - Resolve and prepare local DB"]
+        AST --> OPEN["localdb.Open<br/>per-request temp dir, single pinned connection"]
+        OPEN --> RESOLVE["resolveSources(collectSources(Stmt))<br/>schema -> connector + TableSchema"]
+        RESOLVE --> CREATE["per source, serially:<br/>Attach(schema) + CreateTable"]
+    end
+
+    subgraph s3["3 - Fetch sources concurrently (errgroup, up to 8)"]
+        CREATE --> PLAN["planScan(Stmt, src, ts, params)<br/>push-down: filters / ORDER BY / LIMIT / columns"]
+        PLAN --> SA["connector A.Scan(req, emit)"]
+        PLAN --> SB["connector B.Scan(req, emit)"]
+        PLAN --> SC["connector ... Scan(req, emit)"]
+        SA -- "emit(chunk) per API page" --> INSERT["db.Insert(rows)<br/>mutex: serialized onto the pinned connection"]
+        SB -- "emit(chunk)" --> INSERT
+        SC -- "emit(chunk)" --> INSERT
+        INSERT -. "chunk.Warnings" .-> WARN[("warnings")]
+    end
+
+    subgraph s4["4 - Resolve query locally"]
+        INSERT --> QUERY["db.Query(Raw, params)<br/>original SQL run verbatim against SQLite"]
+        QUERY --> RESULT["Result: Columns + Rows + Warnings"]
+    end
+
+    RESULT --> OUT["result.Write -> stdout (table / json / csv)<br/>warnings -> stderr"]
+```
+
+Stages 1, 2, and 4 are serial; stage 3 fans out. Each source is planned into a
+push-down `ScanRequest`, scanned by its connector (which streams one chunk per API
+page through `emit`), and loaded into the local DB as each chunk arrives —
+serialized by a mutex onto the single pinned connection. The first error cancels
+the whole group. See the orchestration in `internal/engine/engine.go`.
+
 ## Connectors
 
 dfetch ships with five connectors — four built in (no configuration) plus a
