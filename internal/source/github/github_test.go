@@ -35,21 +35,24 @@ func eqFilter(col, val string) source.Filter {
 func collectScan(c source.Connector, req source.ScanRequest) (*source.Rows, error) {
 	rows := &source.Rows{}
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		if rows.Columns == nil {
+		if rows.Columns == nil && len(chunk.Columns) > 0 {
 			rows.Columns = chunk.Columns
 		}
 		rows.Rows = append(rows.Rows, chunk.Rows...)
+		rows.Warnings = append(rows.Warnings, chunk.Warnings...)
 		return nil
 	})
 	return rows, err
 }
 
-// scanChunkSizes runs Scan and records the row count of each emitted chunk, so
-// streaming tests can assert one chunk per page.
+// scanChunkSizes runs Scan and records the row count of each data chunk, so
+// streaming tests can assert one chunk per page (warning-only chunks are ignored).
 func scanChunkSizes(c source.Connector, req source.ScanRequest) ([]int, error) {
 	var sizes []int
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		sizes = append(sizes, len(chunk.Rows))
+		if len(chunk.Rows) > 0 {
+			sizes = append(sizes, len(chunk.Rows))
+		}
 		return nil
 	})
 	return sizes, err
@@ -61,6 +64,30 @@ const tenIssues = `[
 	{"number":4,"state":"open"},{"number":5,"state":"open"},{"number":6,"state":"open"},
 	{"number":7,"state":"open"},{"number":8,"state":"open"},{"number":9,"state":"open"},
 	{"number":10,"state":"open"}]`
+
+// When an uncapped scan hits the maxPages cap with more pages available, the
+// connector emits a truncation warning; a single-page scan does not.
+func TestScanIssuesPageCapWarning(t *testing.T) {
+	// Handler always advertises a next page, so the scan never exhausts.
+	capped := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<http://`+r.Host+r.URL.Path+`?page=next>; rel="next"`)
+		_, _ = w.Write([]byte(tenIssues))
+	})
+	req := source.ScanRequest{Table: "issues", Filters: []source.Filter{eqFilter("owner", "golang"), eqFilter("repo", "go")}}
+	res, err := collectScan(capped, req)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], "github.issues")
+	assert.Contains(t, res.Warnings[0], "cap")
+
+	// A single page (no next link) exhausts cleanly: no warning.
+	single := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(tenIssues))
+	})
+	res, err = collectScan(single, req)
+	require.NoError(t, err)
+	assert.Empty(t, res.Warnings)
+}
 
 // Fix: LIMIT push-down must account for OFFSET. With LIMIT 2 OFFSET 3 the
 // connector must fetch limit+offset=5 rows so SQLite can apply the OFFSET; if it

@@ -104,7 +104,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 func (c *Connector) getJSON(ctx context.Context, rawurl string, v any) (next string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github: GET %s: %w", rawurl, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -114,13 +114,13 @@ func (c *Connector) getJSON(ctx context.Context, rawurl string, v any) (next str
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github: GET %s: %w", rawurl, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github: GET %s: reading response: %w", rawurl, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("github: GET %s: %s: %s", rawurl, resp.Status, apiMessage(body))

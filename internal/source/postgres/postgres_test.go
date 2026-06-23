@@ -19,15 +19,31 @@ var orders = map[string]string{
 	"created_at": "timestamp with time zone",
 }
 
+func TestBuildSelectCappedSignal(t *testing.T) {
+	// Unbounded scan → the maxRows safety cap is applied.
+	_, _, capped := buildSelect("public", source.ScanRequest{Table: "orders"}, orders, 100000)
+	assert.True(t, capped, "unbounded scan should report capped")
+
+	// A pushed user LIMIT (safe order, all filters consumed) is not the cap, even
+	// when the limit equals maxRows — so the caller must not warn.
+	limit := 100000
+	_, _, capped = buildSelect("public", source.ScanRequest{
+		Table:   "orders",
+		OrderBy: []source.OrderTerm{{Column: "id"}},
+		Limit:   &limit,
+	}, orders, 100000)
+	assert.False(t, capped, "pushed user LIMIT must not be reported as the cap")
+}
+
 func TestBuildSelectProjection(t *testing.T) {
-	sql, args := buildSelect("public",
+	sql, args, _ := buildSelect("public",
 		source.ScanRequest{Table: "orders", Columns: []string{"id", "total"}}, orders, 100000)
 	assert.Equal(t, `SELECT "id", "total" FROM "public"."orders" LIMIT 100000`, sql)
 	assert.Empty(t, args)
 }
 
 func TestBuildSelectStarWhenNoColumns(t *testing.T) {
-	sql, _ := buildSelect("public", source.ScanRequest{Table: "orders"}, orders, 100000)
+	sql, _, _ := buildSelect("public", source.ScanRequest{Table: "orders"}, orders, 100000)
 	assert.Equal(t, `SELECT * FROM "public"."orders" LIMIT 100000`, sql)
 }
 
@@ -36,7 +52,7 @@ func TestBuildSelectWhere(t *testing.T) {
 		{Column: "status", Op: sqlparse.OpEq, Value: "paid"},
 		{Column: "total", Op: sqlparse.OpGte, Value: int64(5)},
 	}}
-	sql, args := buildSelect("public", req, orders, 100000)
+	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t, `SELECT * FROM "public"."orders" WHERE "status" = $1 AND "total" >= $2 LIMIT 100000`, sql)
 	assert.Equal(t, []any{"paid", int64(5)}, args)
 }
@@ -46,7 +62,7 @@ func TestBuildSelectInAndBetween(t *testing.T) {
 		{Column: "status", Op: sqlparse.OpIn, Values: []any{"paid", "shipped"}},
 		{Column: "id", Op: sqlparse.OpBetween, Values: []any{int64(1), int64(9)}},
 	}}
-	sql, args := buildSelect("public", req, orders, 100000)
+	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t,
 		`SELECT * FROM "public"."orders" WHERE "status" IN ($1, $2) AND "id" BETWEEN $3 AND $4 LIMIT 100000`, sql)
 	assert.Equal(t, []any{"paid", "shipped", int64(1), int64(9)}, args)
@@ -61,7 +77,7 @@ func TestBuildSelectSkipsLikeAndDoesNotPushLimit(t *testing.T) {
 		OrderBy: []source.OrderTerm{{Column: "id", Desc: true}},
 		Limit:   intPtr(5),
 	}
-	sql, args := buildSelect("public", req, orders, 100000)
+	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t, `SELECT * FROM "public"."orders" LIMIT 100000`, sql) // no WHERE, no ORDER BY, cap
 	assert.Empty(t, args)
 }
@@ -76,7 +92,7 @@ func TestBuildSelectPushesOrderAndLimit(t *testing.T) {
 		Limit:   intPtr(5),
 		Offset:  intPtr(3),
 	}
-	sql, args := buildSelect("public", req, orders, 100000)
+	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t,
 		`SELECT * FROM "public"."orders" WHERE "status" = $1 ORDER BY "created_at" DESC NULLS LAST LIMIT 8`, sql)
 	assert.Equal(t, []any{"paid"}, args)
@@ -89,7 +105,7 @@ func TestBuildSelectTextOrderDoesNotPushLimit(t *testing.T) {
 		OrderBy: []source.OrderTerm{{Column: "status"}}, // text
 		Limit:   intPtr(5),
 	}
-	sql, _ := buildSelect("public", req, orders, 100000)
+	sql, _, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t, `SELECT * FROM "public"."orders" LIMIT 100000`, sql)
 }
 

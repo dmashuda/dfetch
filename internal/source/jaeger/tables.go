@@ -135,7 +135,32 @@ func (c *Connector) scanSpans(ctx context.Context, req source.ScanRequest, emit 
 	// applies the LIMIT. search_depth is only a fetch cap on an unbounded scan.
 	q.Set("query.search_depth", strconv.Itoa(maxTraces))
 
-	return c.streamTraces(ctx, c.baseURL+"/api/v3/traces?"+q.Encode(), emit)
+	// Count distinct traces returned so we can warn if the search_depth cap was hit.
+	traces := map[string]struct{}{}
+	counting := func(chunk *source.Rows) error {
+		for _, row := range chunk.Rows {
+			if len(row) > 0 {
+				if id, ok := row[0].(string); ok { // spansCols[0] is trace_id
+					traces[id] = struct{}{}
+				}
+			}
+		}
+		return emit(chunk)
+	}
+	if err := c.streamTraces(ctx, c.baseURL+"/api/v3/traces?"+q.Encode(), counting); err != nil {
+		return err
+	}
+	if !hasStartTimeLowerBound(req) {
+		if err := emit(source.Warn("jaeger.spans: searched only a default %s time window (no lower start_time bound) — add a start_time >= filter to widen", defaultWindow)); err != nil {
+			return err
+		}
+	}
+	if len(traces) >= maxTraces {
+		if err := emit(source.Warn("jaeger.spans: truncated at the %d-trace search cap; narrow the time range or add filters for complete results", maxTraces)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // streamTraces fetches an api_v3 traces URL and emits one chunk of span rows per

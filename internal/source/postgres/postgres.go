@@ -219,7 +219,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 		colType[col.name] = col.pgType
 	}
 
-	query, args := buildSelect(c.schema, req, colType, c.maxRows)
+	query, args, capped := buildSelect(c.schema, req, colType, c.maxRows)
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("postgres: scanning %s.%s: %w", c.schema, req.Table, err)
@@ -242,6 +242,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 		batch = make([][]any, 0, batchSize)
 		return nil
 	}
+	total := 0
 	for rows.Next() {
 		cells := make([]any, len(colNames))
 		ptrs := make([]any, len(colNames))
@@ -255,6 +256,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 			cells[i] = normalize(cells[i])
 		}
 		batch = append(batch, cells)
+		total++
 		if len(batch) >= batchSize {
 			if err := flush(); err != nil {
 				return err
@@ -264,7 +266,15 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return flush()
+	if err := flush(); err != nil {
+		return err
+	}
+	// Only warn when the maxRows safety cap (not a pushed user LIMIT) bounded the
+	// scan and the result filled it — a strong sign more rows were left behind.
+	if capped && total >= c.maxRows {
+		return emit(source.Warn("postgres.%s: capped at max_rows=%d; raise the max_rows param or add a LIMIT/filters for the rest", req.Table, c.maxRows))
+	}
+	return nil
 }
 
 // pgTypeToAffinity maps a Postgres data_type to a SQLite column affinity. numeric/
@@ -310,7 +320,9 @@ func normalize(v any) any {
 // superset contract: it pushes only predicates Postgres evaluates identically to
 // SQLite, and pushes LIMIT only when every filter was consumed AND the ordering is
 // safe (otherwise a skipped filter or divergent order could drop wanted rows).
-func buildSelect(schema string, req source.ScanRequest, colType map[string]string, maxRows int) (string, []any) {
+// capped reports whether the maxRows safety cap was applied (rather than a pushed
+// user LIMIT), so the caller can warn only when the cap could have truncated.
+func buildSelect(schema string, req source.ScanRequest, colType map[string]string, maxRows int) (string, []any, bool) {
 	var sb strings.Builder
 	sb.WriteString("SELECT ")
 	sb.WriteString(selectList(req.Columns))
@@ -340,7 +352,7 @@ func buildSelect(schema string, req source.ScanRequest, colType map[string]strin
 	} else {
 		fmt.Fprintf(&sb, " LIMIT %d", maxRows) // cap an otherwise unbounded scan
 	}
-	return sb.String(), args
+	return sb.String(), args, !pushLimit
 }
 
 func selectList(cols []string) string {

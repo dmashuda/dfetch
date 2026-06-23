@@ -110,6 +110,36 @@ func TestRunWithParamsBindsNamedParam(t *testing.T) {
 	assert.Equal(t, "b", res.Rows[0][1])
 }
 
+// Warnings emitted by a connector reach Result.Warnings.
+func TestRunCollectsConnectorWarnings(t *testing.T) {
+	conn := issuesConn()
+	conn.rows.Warnings = []string{"github.issues: stopped at the 10-page cap"}
+	e := engineWith(map[string]source.Connector{"github": conn})
+
+	res, err := e.Run(context.Background(),
+		"SELECT number FROM github.issues WHERE owner='golang' AND repo='go'")
+	require.NoError(t, err)
+	assert.Contains(t, res.Warnings, "github.issues: stopped at the 10-page cap")
+}
+
+// A parse failure is labeled as such.
+func TestRunParseErrorIsLabeled(t *testing.T) {
+	e := engineWith(map[string]source.Connector{})
+	_, err := e.Run(context.Background(), "SELECT FROM")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing SQL:")
+}
+
+// A SQLite error from the final query is labeled as a local-database failure.
+func TestRunLocalQueryErrorIsLabeled(t *testing.T) {
+	conn := issuesConn()
+	e := engineWith(map[string]source.Connector{"github": conn})
+	_, err := e.Run(context.Background(),
+		"SELECT no_such_column FROM github.issues WHERE owner='golang' AND repo='go'")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "executing query on the local database:")
+}
+
 func TestRunPushdownAndResolve(t *testing.T) {
 	conn := issuesConn()
 	e := engineWith(map[string]source.Connector{"github": conn})

@@ -27,23 +27,29 @@ func eqFilter(col, val string) source.Filter {
 	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
 }
 
-// collectScan runs Scan and accumulates every emitted chunk into one Rows.
+// collectScan runs Scan and accumulates every emitted chunk into one Rows,
+// including any Warnings.
 func collectScan(c source.Connector, req source.ScanRequest) (*source.Rows, error) {
 	rows := &source.Rows{}
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		if rows.Columns == nil {
+		if rows.Columns == nil && len(chunk.Columns) > 0 {
 			rows.Columns = chunk.Columns
 		}
 		rows.Rows = append(rows.Rows, chunk.Rows...)
+		rows.Warnings = append(rows.Warnings, chunk.Warnings...)
 		return nil
 	})
 	return rows, err
 }
 
+// scanChunkSizes records the row count of each data chunk (warning-only chunks
+// carry no rows and are ignored here).
 func scanChunkSizes(c source.Connector, req source.ScanRequest) ([]int, error) {
 	var sizes []int
 	err := c.Scan(context.Background(), req, func(chunk *source.Rows) error {
-		sizes = append(sizes, len(chunk.Rows))
+		if len(chunk.Rows) > 0 {
+			sizes = append(sizes, len(chunk.Rows))
+		}
 		return nil
 	})
 	return sizes, err
@@ -207,6 +213,57 @@ func TestScanSpansByTraceID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v3/traces/abc", gotPath)
 	require.Len(t, rows.Rows, 2)
+	assert.Empty(t, rows.Warnings) // direct trace lookup applies no window/cap
+}
+
+// A service_name scan with no start_time filter falls back to the default recent
+// window and warns that results may be incomplete.
+func TestScanSpansDefaultWindowWarning(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	res, err := collectScan(c, source.ScanRequest{
+		Table:   "spans",
+		Filters: []source.Filter{eqFilter("service_name", "dfetch")},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], "jaeger.spans")
+	assert.Contains(t, res.Warnings[0], "start_time")
+}
+
+// An upper-bound-only start_time filter still leaves the lower bound defaulted to
+// a window, so the warning must fire (the connector silently searched only 1h).
+func TestScanSpansUpperBoundOnlyWarns(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	res, err := collectScan(c, source.ScanRequest{
+		Table: "spans",
+		Filters: []source.Filter{
+			eqFilter("service_name", "dfetch"),
+			{Column: "start_time", Op: sqlparse.OpLt, Value: "2026-01-01T00:00:00Z"},
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], "start_time")
+}
+
+// With an explicit lower start_time bound, no default-window warning is emitted.
+func TestScanSpansWithStartTimeNoWindowWarning(t *testing.T) {
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(oneTrace))
+	})
+	res, err := collectScan(c, source.ScanRequest{
+		Table: "spans",
+		Filters: []source.Filter{
+			eqFilter("service_name", "dfetch"),
+			{Column: "start_time", Op: sqlparse.OpGte, Value: "2026-01-01T00:00:00Z"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Warnings)
 }
 
 func TestScanSpansRequiresService(t *testing.T) {

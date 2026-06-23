@@ -31,8 +31,17 @@ var queryCmd = &cobra.Command{
 			return err
 		}
 
+		printWarnings(cmd, result.Warnings)
 		return result.Write(cmd.OutOrStdout(), queryFormat)
 	},
+}
+
+// printWarnings writes any non-fatal result warnings to stderr, so stdout stays
+// clean for piping (e.g. --format json|csv).
+func printWarnings(cmd *cobra.Command, warnings []string) {
+	for _, w := range warnings {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+w)
+	}
 }
 
 func init() {

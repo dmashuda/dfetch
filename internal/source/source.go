@@ -83,6 +83,18 @@ func (r ScanRequest) Filter(column string) (Filter, bool) {
 type Rows struct {
 	Columns []string
 	Rows    [][]any
+	// Warnings carries non-fatal notices about this result, e.g. that the
+	// connector truncated at a cap or applied a narrowing default, so the result
+	// may be incomplete. The engine collects these across all emitted chunks and
+	// surfaces them to the user. A chunk may carry only Warnings (no rows).
+	Warnings []string
+}
+
+// Warn returns a Rows that carries a single warning and no data, for a connector
+// to emit when it truncates or otherwise narrows a result. The message should
+// name the table and how to get a complete result.
+func Warn(format string, a ...any) *Rows {
+	return &Rows{Warnings: []string{fmt.Sprintf(format, a...)}}
 }
 
 // Connector exposes the tables of one external system.

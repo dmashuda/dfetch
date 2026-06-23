@@ -98,7 +98,7 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 func (c *Connector) getJSON(ctx context.Context, path string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("docker: GET %s: %w", path, err)
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -110,7 +110,7 @@ func (c *Connector) getJSON(ctx context.Context, path string, v any) error {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("docker: GET %s: reading response: %w", path, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("docker: GET %s: %s: %s", path, resp.Status, apiMessage(body))
