@@ -212,8 +212,7 @@ the whole group. See the orchestration in `internal/engine/engine.go`.
 ## Contributing
 
 Building from source, running the tests, and **writing a new connector** are
-covered in [CONTRIBUTING.md](CONTRIBUTING.md). By participating you agree to the
-[Code of Conduct](CODE_OF_CONDUCT.md); to report a vulnerability see
+covered in [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see
 [SECURITY.md](SECURITY.md).
 
 ## License
