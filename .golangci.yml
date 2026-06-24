@@ -6,10 +6,24 @@ linters:
     - errname
     - errorlint
     - gocritic
+    - gosec
     - misspell
     - prealloc
     - unconvert
     - unparam
+  settings:
+    gosec:
+      excludes:
+        # dfetch's purpose is to read user-specified config/SQL files; G304
+        # (file inclusion via variable) is inherent to the CLI, not a flaw.
+        - G304
+  exclusions:
+    rules:
+      # tools/examples is a dev-only README/connectors generator, never shipped
+      # in the binary; its file/subprocess handling is trusted local tooling.
+      - path: tools/examples/
+        linters:
+          - gosec
 
 formatters:
   enable:

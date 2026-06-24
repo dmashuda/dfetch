@@ -531,7 +531,7 @@ func parseNumeric(s string) (LiteralKind, any) {
 			return LiteralInteger, n
 		}
 		if u, err := strconv.ParseUint(ls[2:], 16, 64); err == nil {
-			return LiteralInteger, int64(u)
+			return LiteralInteger, int64(u) //nolint:gosec // G115: preserve the bit pattern, matching SQLite's int64 storage of hex literals
 		}
 	}
 	if !strings.ContainsAny(s, ".eE") {
