@@ -83,8 +83,10 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   dependency-review:
-    # Only on PRs: compares the PR's dependency changes against the base.
-    if: github.event_name == 'pull_request'
+    # Only on PRs, and only once the repo is public — dependency review needs the
+    # dependency graph, which is free for public repos (GHAS otherwise). While the
+    # repo is private this job is skipped (neutral); it auto-enables on going public.
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
