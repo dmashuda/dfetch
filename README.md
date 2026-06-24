@@ -25,15 +25,7 @@ tar xzf dfetch_linux_amd64.tar.gz && sudo mv dfetch /usr/local/bin/
 dfetch version
 ```
 
-Or install with Go:
-
-```sh
-go install github.com/dmashuda/dfetch@latest
-```
-
-dfetch links against [`mattn/go-sqlite3`](https://github.com/mattn/go-sqlite3)
-(cgo), so installing with Go needs a C compiler and `CGO_ENABLED=1`. To build
-from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+To build from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick start
 
@@ -65,6 +57,104 @@ superset of the rows.
 `--config <path>` (global) points at a config file; the default is `./dfetch.yaml`
 in the current directory, falling back to `~/dfetch.yaml` (see
 [Configuration](#configuration)).
+
+## Connectors
+
+dfetch ships with five connectors — four built in (no configuration) plus a
+configured PostgreSQL `type`:
+
+| schema | source | tables |
+| --- | --- | --- |
+| `github` | GitHub REST API | issues, pulls, repos, commits, releases, workflow_runs, artifacts |
+| `jaeger` | Jaeger api_v3 | spans, services, operations |
+| `datagov` | data.gov / CKAN | datasets, resources, organizations, groups |
+| `docker` | Docker Engine API | containers, images, volumes, networks |
+| `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery) |
+
+See **[connectors.md](connectors.md)** for each connector's connection details,
+required filters, columns, push-down behavior, and runnable query examples.
+
+## Saved queries
+
+Store reusable, parameterized queries in your `dfetch.yaml` (see
+[Configuration](#configuration)) under a `queries` list. Each query has a `name`
+(used by `dfetch run`), an optional `description`, an ordered list of `params`
+bound as `:name` placeholders in the `sql`, and an optional `columns` list that
+selects the default output columns:
+
+```yaml
+queries:
+  - name: repo-issues
+    description: Open issues for a repo
+    params: [owner, repo]                  # bound positionally
+    columns: [number, title, user_login]
+    sql: SELECT * FROM github.issues WHERE owner = :owner AND repo = :repo AND state = 'open'
+```
+
+```sh
+dfetch queries                             # list saved queries
+dfetch run repo-issues golang go           # binds :owner=golang, :repo=go
+dfetch run repo-issues golang go --all-columns   # every column the query produces
+```
+
+Positional arguments bind to `params` in order. Parameters are SQLite bind values,
+so they substitute values (not table or column names). When `columns` is set,
+output is narrowed to those columns unless `--all-columns` is passed.
+## Configuration
+
+dfetch works with no config. To point a connector at a non-default host, or to
+register a connector under additional schemas, create a `dfetch.yaml` in the
+directory you run dfetch from — config is per-project. dfetch looks for
+`./dfetch.yaml` first and falls back to `~/dfetch.yaml`; `--config <path>`
+overrides both. Each `sources` entry binds a SQL schema `name` to a connector
+`type`, with connector-specific `params`:
+
+```yaml
+sources:
+  - name: gh-enterprise        # queried as gh-enterprise.issues
+    type: github
+    params:
+      base_url: https://github.example.com/api/v3
+  - name: prod-traces          # queried as prod-traces.spans
+    type: jaeger
+    params:
+      base_url: http://jaeger.example.com:16686
+```
+
+## Tracing
+
+dfetch is instrumented with OpenTelemetry. Tracing is **off unless an OTLP
+endpoint is configured** — without it there's no exporter and effectively no
+overhead. To capture traces for debugging, run the bundled Jaeger and point
+dfetch at it:
+
+```sh
+docker compose up -d                                   # Jaeger (UI on :16686)
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+dfetch query "SELECT number, title FROM github.issues
+              WHERE owner='golang' AND repo='go' AND state='open'
+              ORDER BY updated_at DESC LIMIT 5"
+# open http://localhost:16686 and pick service "dfetch"
+```
+
+Each query is one trace:
+
+```
+engine.Run (db.query.text=<sql>)
+├─ engine.parse               → what the parser understood (tables, joins, limit, …)
+├─ engine.loadSource (github.issues)
+│  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
+│  └─ ATTACH / CREATE / INSERT (otelsql)
+└─ SELECT                      (the local resolve; otelsql)
+```
+
+Use it to see how many API calls a query made (pagination shows as multiple `GET`
+spans), where latency went (API vs. local SQL), and which step failed (failed
+spans are marked with the error). Set `OTEL_SERVICE_NAME` or other standard
+`OTEL_*` vars to customize; `OTEL_SDK_DISABLED=true` forces tracing off.
+
+Because the Jaeger connector queries Jaeger, you can analyze these traces with
+dfetch itself — see the [Jaeger connector](connectors.md#jaeger--schema-jaeger).
 
 ## How a query runs
 
@@ -112,104 +202,6 @@ push-down `ScanRequest`, scanned by its connector (which streams one chunk per A
 page through `emit`), and loaded into the local DB as each chunk arrives —
 serialized by a mutex onto the single pinned connection. The first error cancels
 the whole group. See the orchestration in `internal/engine/engine.go`.
-
-## Connectors
-
-dfetch ships with five connectors — four built in (no configuration) plus a
-configured PostgreSQL `type`:
-
-| schema | source | tables |
-| --- | --- | --- |
-| `github` | GitHub REST API | issues, pulls, repos, commits, releases, workflow_runs, artifacts |
-| `jaeger` | Jaeger api_v3 | spans, services, operations |
-| `datagov` | data.gov / CKAN | datasets, resources, organizations, groups |
-| `docker` | Docker Engine API | containers, images, volumes, networks |
-| `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery) |
-
-See **[connectors.md](connectors.md)** for each connector's connection details,
-required filters, columns, push-down behavior, and runnable query examples.
-
-## Configuration
-
-dfetch works with no config. To point a connector at a non-default host, or to
-register a connector under additional schemas, create a `dfetch.yaml` in the
-directory you run dfetch from — config is per-project. dfetch looks for
-`./dfetch.yaml` first and falls back to `~/dfetch.yaml`; `--config <path>`
-overrides both. Each `sources` entry binds a SQL schema `name` to a connector
-`type`, with connector-specific `params`:
-
-```yaml
-sources:
-  - name: gh-enterprise        # queried as gh-enterprise.issues
-    type: github
-    params:
-      base_url: https://github.example.com/api/v3
-  - name: prod-traces          # queried as prod-traces.spans
-    type: jaeger
-    params:
-      base_url: http://jaeger.example.com:16686
-```
-
-### Saved queries
-
-Add a `queries` list to store reusable, parameterized queries. Each query has a
-`name` (used by `dfetch run`), an optional `description`, an ordered list of
-`params` bound as `:name` placeholders in the `sql`, and an optional `columns`
-list selecting the default output columns:
-
-```yaml
-queries:
-  - name: fetch-trace
-    description: Spans for a trace
-    params: [trace_id]               # bound positionally: dfetch run fetch-trace <trace_id>
-    columns: [trace_id, name, duration]
-    sql: SELECT * FROM prod-traces.spans WHERE trace_id = :trace_id
-```
-
-```sh
-dfetch queries                       # list saved queries
-dfetch run fetch-trace abc123        # binds :trace_id = abc123, shows the columns above
-dfetch run fetch-trace abc123 --all-columns   # show every column the query produces
-```
-
-Positional arguments bind to `params` in order. Parameters are SQLite bind
-values, so they substitute values (not table or column names). When `columns` is
-set, output is narrowed to those columns unless `--all-columns` is passed.
-
-## Tracing
-
-dfetch is instrumented with OpenTelemetry. Tracing is **off unless an OTLP
-endpoint is configured** — without it there's no exporter and effectively no
-overhead. To capture traces for debugging, run the bundled Jaeger and point
-dfetch at it:
-
-```sh
-docker compose up -d                                   # Jaeger (UI on :16686)
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-dfetch query "SELECT number, title FROM github.issues
-              WHERE owner='golang' AND repo='go' AND state='open'
-              ORDER BY updated_at DESC LIMIT 5"
-# open http://localhost:16686 and pick service "dfetch"
-```
-
-Each query is one trace:
-
-```
-engine.Run (db.query.text=<sql>)
-├─ engine.parse               → what the parser understood (tables, joins, limit, …)
-├─ engine.loadSource (github.issues)
-│  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
-│  └─ ATTACH / CREATE / INSERT (otelsql)
-└─ SELECT                      (the local resolve; otelsql)
-```
-
-Use it to see how many API calls a query made (pagination shows as multiple `GET`
-spans), where latency went (API vs. local SQL), and which step failed (failed
-spans are marked with the error). Set `OTEL_SERVICE_NAME` or other standard
-`OTEL_*` vars to customize; `OTEL_SDK_DISABLED=true` forces tracing off.
-
-Because the Jaeger connector queries Jaeger, you can analyze these traces with
-dfetch itself — see the [Jaeger connector](connectors.md#jaeger--schema-jaeger).
 
 ## Contributing
 
