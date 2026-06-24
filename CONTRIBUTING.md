@@ -25,6 +25,14 @@ on every push/PR to `main`. Releases are tag-triggered (`v*`) and build each OS
 on its native runner, since cgo can't be cleanly cross-compiled
 (`.github/workflows/release.yaml`).
 
+## Pull requests
+
+Work on a branch and open a PR against `main`; don't push to `main` directly.
+Keep PRs focused, make sure `make test`, `make lint`, and `make coverage` pass
+locally, and let CI go green before merging. Commit messages use
+conventional-commit prefixes — `feat:`, `fix:`, `docs:`, `chore:`, `build:`,
+`test:` — which also drive the generated release notes.
+
 ### Testing conventions
 
 Use [testify](https://github.com/stretchr/testify) — `require` for fatal

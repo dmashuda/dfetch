@@ -1,5 +1,11 @@
 # dfetch
 
+[![CI](https://github.com/dmashuda/dfetch/actions/workflows/ci.yaml/badge.svg)](https://github.com/dmashuda/dfetch/actions/workflows/ci.yaml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dmashuda/dfetch.svg)](https://pkg.go.dev/github.com/dmashuda/dfetch)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dmashuda/dfetch)](https://goreportcard.com/report/github.com/dmashuda/dfetch)
+[![Latest release](https://img.shields.io/github/v/release/dmashuda/dfetch)](https://github.com/dmashuda/dfetch/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Query and join data across any data source with SQL, on demand.
 
 `dfetch` takes a SQL query (SQLite syntax), validates it, fetches each referenced
@@ -206,4 +212,12 @@ the whole group. See the orchestration in `internal/engine/engine.go`.
 ## Contributing
 
 Building from source, running the tests, and **writing a new connector** are
-covered in [CONTRIBUTING.md](CONTRIBUTING.md).
+covered in [CONTRIBUTING.md](CONTRIBUTING.md). By participating you agree to the
+[Code of Conduct](CODE_OF_CONDUCT.md); to report a vulnerability see
+[SECURITY.md](SECURITY.md).
+
+## License
+
+dfetch is released under the [MIT License](LICENSE). The bundled ANTLR SQLite
+grammar (`internal/sqlparse/grammar/`) is licensed under BSD-3-Clause by its
+original authors; those headers are preserved.
