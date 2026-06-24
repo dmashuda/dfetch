@@ -112,7 +112,7 @@ func (c *Connector) ListTables(ctx context.Context, opts source.ListOptions) ([]
 	}
 	q += ` ORDER BY table_name`
 	if opts.Limit > 0 {
-		q += fmt.Sprintf(` LIMIT %d`, opts.Limit)
+		q += fmt.Sprintf(` LIMIT %d`, opts.Limit) //nolint:gosec // G202: LIMIT is an int, not a user-controlled string
 	}
 
 	rows, err := c.db.QueryContext(ctx, q, args...)

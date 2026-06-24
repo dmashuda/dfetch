@@ -1,6 +1,6 @@
 module github.com/dmashuda/dfetch
 
-go 1.26.1
+go 1.26.4
 
 require (
 	github.com/XSAM/otelsql v0.42.0
