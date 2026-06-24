@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a problem with dfetch
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please do **not** report security vulnerabilities here —
+        see [SECURITY.md](../../SECURITY.md) for private reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact `dfetch` command(s) and, if relevant, the `dfetch.yaml` you used (redact secrets).
+      placeholder: |
+        dfetch query "SELECT ... FROM github.issues WHERE ..."
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: dfetch version
+      description: Output of `dfetch version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / architecture
+      placeholder: e.g. macOS 15 / arm64, Ubuntu 24.04 / amd64
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / logs
+      description: Paste any error message. Tip - set `OTEL_EXPORTER_OTLP_ENDPOINT` to capture a trace.
+      render: shell

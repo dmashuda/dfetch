@@ -1,3 +1,7 @@
+// Package cmd implements the dfetch command-line interface (cobra): the root
+// command and the query, run, queries, tables, and version subcommands. main
+// calls Execute; each subcommand loads the config, builds the engine, and renders
+// the result.
 package cmd
 
 import (

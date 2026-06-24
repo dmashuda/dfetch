@@ -14,3 +14,10 @@ prof/
 # IDE
 .idea/
 .vscode/
+.junie/
+
+# Agent / tooling local state
+.claude/
+
+# OS
+.DS_Store
