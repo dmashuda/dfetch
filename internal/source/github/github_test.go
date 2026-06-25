@@ -20,7 +20,7 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := New(map[string]any{"base_url": srv.URL})
+	c, err := New(map[string]any{"base_url": srv.URL, "token_command": []any{}})
 	require.NoError(t, err)
 	return c.(*Connector)
 }
@@ -160,6 +160,16 @@ func TestTables(t *testing.T) {
 		assert.NotEmpty(t, tbl.Columns)
 	}
 	assert.ElementsMatch(t, []string{"issues", "pulls", "repos", "commits", "releases", "workflow_runs", "artifacts"}, names)
+}
+
+func TestNewRejectsInvalidTokenCommand(t *testing.T) {
+	_, err := New(map[string]any{"token_command": strings.Join([]string{"gh", "auth"}, " ")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_command must be a list of strings")
+
+	_, err = New(map[string]any{"token_command": []any{"gh", 1}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_command[1] must be a string")
 }
 
 func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
@@ -622,7 +632,7 @@ func TestAPIError(t *testing.T) {
 }
 
 func TestUnknownTable(t *testing.T) {
-	c, _ := New(nil)
+	c, _ := New(map[string]any{"token_command": []any{}})
 	_, err := collectScan(c, source.ScanRequest{Table: "nope"})
 	assert.Error(t, err)
 }
