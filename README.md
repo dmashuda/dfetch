@@ -38,7 +38,7 @@ Or, for Nix users (with flakes):
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     dfetch = {
-      url = "github:dmashuda/dfetch"
+      url = "github:dmashuda/dfetch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -46,7 +46,7 @@ Or, for Nix users (with flakes):
   outputs = { dfetch, ... }: {
     # reference the `dfetch.packages.${system}.default` package in your NixOS,
     # nix-darwin, or home-manager output
-  }
+  };
 }
 ```
 
@@ -65,19 +65,19 @@ dfetch query "SELECT number, title FROM github.issues
 
 A data source is a **connector** that exposes one or more tables under a SQL
 schema (e.g. `github.issues`). dfetch pushes filters, `ORDER BY`, and `LIMIT`
-down to each source where it safely can, then resolves the _full_ query locally
+down to each source where it safely can, then resolves the *full* query locally
 in SQLite — so the result is always correct even when a connector returns a
 superset of the rows.
 
 ## Commands
 
-| command                       | description                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `dfetch query "<sql>"`        | Run a SQL query. `--format table\|json\|csv` (default `table`).             |
+| command | description |
+| --- | --- |
+| `dfetch query "<sql>"` | Run a SQL query. `--format table\|json\|csv` (default `table`). |
 | `dfetch run <name> [args...]` | Run a saved query, binding args to its params. `--all-columns`, `--format`. |
-| `dfetch queries`              | List saved queries with their parameters and descriptions.                  |
-| `dfetch tables [schema]`      | List available tables and columns, optionally for one schema.               |
-| `dfetch version`              | Print the version.                                                          |
+| `dfetch queries` | List saved queries with their parameters and descriptions. |
+| `dfetch tables [schema]` | List available tables and columns, optionally for one schema. |
+| `dfetch version` | Print the version. |
 
 `--config <path>` (global) points at a config file; the default is `./dfetch.yaml`
 in the current directory, falling back to `~/dfetch.yaml` (see
@@ -88,13 +88,13 @@ in the current directory, falling back to `~/dfetch.yaml` (see
 dfetch ships with five connectors — four built in (no configuration) plus a
 configured PostgreSQL `type`:
 
-| schema     | source                     | tables                                                            |
-| ---------- | -------------------------- | ----------------------------------------------------------------- |
-| `github`   | GitHub REST API            | issues, pulls, repos, commits, releases, workflow_runs, artifacts |
-| `jaeger`   | Jaeger api_v3              | spans, services, operations                                       |
-| `datagov`  | data.gov / CKAN            | datasets, resources, organizations, groups                        |
-| `docker`   | Docker Engine API          | containers, images, volumes, networks                             |
-| `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery)                                     |
+| schema | source | tables |
+| --- | --- | --- |
+| `github` | GitHub REST API | issues, pulls, repos, commits, releases, workflow_runs, artifacts |
+| `jaeger` | Jaeger api_v3 | spans, services, operations |
+| `datagov` | data.gov / CKAN | datasets, resources, organizations, groups |
+| `docker` | Docker Engine API | containers, images, volumes, networks |
+| `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery) |
 
 See **[connectors.md](connectors.md)** for each connector's connection details,
 required filters, columns, push-down behavior, and runnable query examples.
@@ -111,7 +111,7 @@ selects the default output columns:
 queries:
   - name: repo-issues
     description: Open issues for a repo
-    params: [owner, repo] # bound positionally
+    params: [owner, repo]                  # bound positionally
     columns: [number, title, user_login]
     sql: SELECT * FROM github.issues WHERE owner = :owner AND repo = :repo AND state = 'open'
 ```
@@ -125,7 +125,6 @@ dfetch run repo-issues golang go --all-columns   # every column the query produc
 Positional arguments bind to `params` in order. Parameters are SQLite bind values,
 so they substitute values (not table or column names). When `columns` is set,
 output is narrowed to those columns unless `--all-columns` is passed.
-
 ## Configuration
 
 dfetch works with no config. To point a connector at a non-default host, or to
@@ -137,11 +136,11 @@ overrides both. Each `sources` entry binds a SQL schema `name` to a connector
 
 ```yaml
 sources:
-  - name: gh-enterprise # queried as gh-enterprise.issues
+  - name: gh-enterprise        # queried as gh-enterprise.issues
     type: github
     params:
       base_url: https://github.example.com/api/v3
-  - name: prod-traces # queried as prod-traces.spans
+  - name: prod-traces          # queried as prod-traces.spans
     type: jaeger
     params:
       base_url: http://jaeger.example.com:16686
