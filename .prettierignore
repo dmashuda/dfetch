@@ -1,0 +1,23 @@
+# connectors.md is generated from examples.yaml by `make examples` — formatting
+# it here would fight the generator and break `make examples-check`.
+connectors.md
+
+# ANTLR-generated parser — never hand-formatted (see CLAUDE.md).
+internal/sqlparse/gen/
+
+# Generated / lock files.
+package-lock.json
+flake.lock
+go.sum
+
+# Build, profiling, and tooling output.
+bin/
+prof/
+result
+coverage.out
+node_modules/
+
+# Editor / local tooling.
+.idea/
+.junie/
+.claude/

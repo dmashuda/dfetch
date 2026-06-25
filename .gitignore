@@ -16,6 +16,9 @@ prof/
 .vscode/
 .junie/
 
+# Node tooling (Prettier) — package.json/package-lock.json are tracked
+node_modules/
+
 # Agent / tooling local state
 .claude/
 

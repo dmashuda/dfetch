@@ -42,7 +42,7 @@ dfetch resolves a query like this (see `internal/engine/engine.go`):
    the result.
 
 The crucial consequence of step 5: **SQLite is the source of truth.** A connector
-only has to return a *superset* of the rows the query needs — the engine re-applies
+only has to return a _superset_ of the rows the query needs — the engine re-applies
 the full `WHERE`/`JOIN`/`ORDER BY`/`LIMIT` locally. Push-down is therefore a pure
 optimization (fetch less), never a correctness requirement.
 
@@ -118,7 +118,7 @@ that matches `Factory`.
 
 Connectors with a small, fixed set of tables (the API connectors here) just
 return them all from `Tables()`. A **dynamic source** — a SQL warehouse like
-Postgres or Snowflake with hundreds of tables — should *not* enumerate its whole
+Postgres or Snowflake with hundreds of tables — should _not_ enumerate its whole
 catalog to run one query or to power `dfetch tables`. Such a connector returns an
 empty (or curated) `Tables()` and implements two optional capabilities, which the
 engine detects by type assertion:
@@ -159,7 +159,7 @@ sources:
     type: postgres
     params:
       schemas: [public, analytics]
-      tables:  [public.orders, public.users]   # optional allowlist
+      tables: [public.orders, public.users] # optional allowlist
 ```
 
 ## The query lifecycle in detail
@@ -212,7 +212,7 @@ columns is free.
 
 **What the planner offers:**
 
-- **Filters** whose column belongs to the table and is *attributable* to this
+- **Filters** whose column belongs to the table and is _attributable_ to this
   source (qualified with the source's alias/name, or unqualified in a
   single-source query). Structured comparisons are converted to `Filter`;
   `OpNone` (unparsed), `IS NULL`, and `IS NOT NULL` are **not** offered. Bind
@@ -232,13 +232,13 @@ columns is free.
 read `Filter.Values`.
 
 **The golden rule:** only translate a filter/order/limit into an upstream request
-parameter when doing so still returns *exactly the rows the query wants, or a
-superset*. If the API can't honor something precisely, **ignore it** and let
+parameter when doing so still returns _exactly the rows the query wants, or a
+superset_. If the API can't honor something precisely, **ignore it** and let
 SQLite finish the job. Concretely:
 
 - **Equality on a column the API filters on** → safe to push.
 - **A LIMIT** is only safe to push when the API returns exactly the filtered +
-  ordered set — i.e. every filter was consumed by the API *and* the ordering was
+  ordered set — i.e. every filter was consumed by the API _and_ the ordering was
   fully honored. A multi-key `ORDER BY` the API can't reproduce must **not** push
   LIMIT, or you'll truncate rows the real order would keep. With an `OFFSET`,
   fetch `limit+offset` rows so SQLite can apply the offset.
@@ -290,8 +290,8 @@ connector type serve several hosts:
 
 ```yaml
 sources:
-  - name: gh-enterprise      # schema; queried as gh-enterprise.issues
-    type: github             # registered connector type
+  - name: gh-enterprise # schema; queried as gh-enterprise.issues
+    type: github # registered connector type
     params:
       base_url: https://github.example.com/api/v3
 ```

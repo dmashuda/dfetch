@@ -33,7 +33,8 @@ queries:
   - name: trace-spans
     description: All spans for a trace
     params: [trace_id]
-    columns: [start_time, service_name, operation_name, duration_ms, status_code]
+    columns:
+      [start_time, service_name, operation_name, duration_ms, status_code]
     sql: |
       SELECT *
       FROM jaeger.spans
