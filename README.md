@@ -31,6 +31,25 @@ tar xzf dfetch_linux_amd64.tar.gz && sudo mv dfetch /usr/local/bin/
 dfetch version
 ```
 
+Or, for Nix users (with flakes):
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    dfetch = {
+      url = "github:dmashuda/dfetch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { dfetch, ... }: {
+    # reference the `dfetch.packages.${system}.default` package in your NixOS,
+    # nix-darwin, or home-manager output
+  };
+}
+```
+
 To build from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick start

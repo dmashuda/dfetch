@@ -24,3 +24,8 @@ node_modules/
 
 # OS
 .DS_Store
+
+# `nix build .#` outputs, this
+# is a symlink to the nix store
+# `/nix/store/*`
+/result
