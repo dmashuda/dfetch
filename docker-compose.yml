@@ -8,8 +8,8 @@ services:
     container_name: dfetch-jaeger
     ports:
       - "16686:16686" # Jaeger UI
-      - "4318:4318"   # OTLP/HTTP (dfetch exports here)
-      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318" # OTLP/HTTP (dfetch exports here)
+      - "4317:4317" # OTLP/gRPC
     restart: unless-stopped
 
   # Local Postgres for the postgres connector's integration tests:

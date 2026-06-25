@@ -1,0 +1,14 @@
+{
+  "name": "dfetch-dev-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev-only tooling for dfetch: Prettier formatting of Markdown/YAML/JSON docs and config. Not published and not part of the Go module.",
+  "license": "MIT",
+  "scripts": {
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.8.4"
+  }
+}
