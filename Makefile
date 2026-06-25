@@ -27,7 +27,7 @@ EXAMPLES_YAML?=examples.yaml
 EXAMPLES_DOC?=connectors.md
 
 .PHONY: build run test vet lint coverage generate install clean profile pprof \
-        examples examples-check examples-test
+        examples examples-check examples-test fmt fmt-check
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) .
@@ -46,6 +46,19 @@ vet:
 
 lint:
 	golangci-lint run ./...
+
+# Prettier formats the Markdown / YAML / JSON docs and config (Go is handled by
+# gofumpt via golangci-lint, not here). Requires Node; the version is pinned in
+# package.json / package-lock.json. `make fmt` rewrites files in place;
+# `make fmt-check` (run in CI's lint job) fails if anything is unformatted.
+node_modules: package.json package-lock.json
+	npm ci
+
+fmt: node_modules
+	npm exec -- prettier --write .
+
+fmt-check: node_modules
+	npm exec -- prettier --check .
 
 # Regenerate the ANTLR SQLite parser. Requires Java (see scripts/gen-parser.sh).
 generate:

@@ -98,6 +98,8 @@ make test       # go test ./...
 make coverage   # tests + coverage gate (excludes generated code)
 make lint       # golangci-lint
 make vet        # go vet (excludes generated code)
+make fmt        # format Markdown/YAML/JSON docs + config with Prettier (needs Node)
+make fmt-check  # offline: fail if any doc/config is unformatted (run in CI's lint job)
 make generate   # regenerate the ANTLR parser (requires Java)
 make examples   # regenerate connectors.md query examples from examples.yaml
 make examples-check  # offline: fail if connectors.md drifted from examples.yaml
@@ -110,6 +112,7 @@ example blocks. The target doc is the Makefile's `EXAMPLES_DOC` (`connectors.md`
 
 ## CI
 
-`.github/workflows/ci.yaml` runs build, `make coverage`, and golangci-lint on
-push/PR to `main`. Releases build per-OS natively (cgo can't cross-compile
-cleanly from one runner) — see `.github/workflows/release.yaml`.
+`.github/workflows/ci.yaml` runs build, `make coverage`, golangci-lint, and
+`make fmt-check` (Prettier) on push/PR to `main`. Releases build per-OS natively
+(cgo can't cross-compile cleanly from one runner) — see
+`.github/workflows/release.yaml`.
