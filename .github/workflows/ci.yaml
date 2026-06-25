@@ -58,10 +58,10 @@ jobs:
       - uses: wimpysworld/nothing-but-nix@main
       - uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v31
-      # - uses: cachix/cachix-action@v17 # TODO enable when Cachix repo secrets are added
-      #   with:
-      #     name: dfetch # TODO ensure name is correct when cache is created
-      #     authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: cachix/cachix-action@v17 # TODO enable when Cachix repo secrets are added
+        with:
+          name: dfetch # TODO ensure name is correct when cache is created
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
       - run: nix build .#
 
 
