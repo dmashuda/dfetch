@@ -69,6 +69,7 @@
             pkgs.gopls
             pkgs.goreleaser # release builds
             pkgs.jdk # make generate (ANTLR parser regen)
+            pkgs.nixfmt # nix formatter
             pkgs.nix-update # automatically udpate `vendorHash`
             pkgs.sqlite # poke localdb / ad-hoc SQL
           ];

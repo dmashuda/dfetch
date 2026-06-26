@@ -52,7 +52,7 @@ jobs:
           DFETCH_TEST_POSTGRES_DSN: postgres://dfetch:dfetch@localhost:5432/dfetch?sslmode=disable
         run: go test -tags integration ./internal/source/postgres/
 
-  test-nix-build:
+  check-nix:
     runs-on: ubuntu-latest
     steps:
       - uses: wimpysworld/nothing-but-nix@687c797a730352432950c707ab493fcc951818d7 # v10
@@ -68,7 +68,10 @@ jobs:
           # are skipped automatically — they still read from the cache. The cache
           # is populated on push to main, where the secret is available.
           skipPush: ${{ github.ref != 'refs/heads/main' }}
-      - run: nix build .#
+      - name: Nix build
+        run: nix build .#
+      - name: Nix file formatting
+        run: find . -type f -name '*.nix' | xargs nix develop -c nixfmt --strict --check
 
   lint:
     runs-on: ubuntu-latest
