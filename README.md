@@ -85,7 +85,7 @@ in the current directory, falling back to `~/dfetch.yaml` (see
 
 ## Connectors
 
-dfetch ships with five connectors — four built in (no configuration) plus a
+dfetch ships with six connectors — five built in (no configuration) plus a
 configured PostgreSQL `type`:
 
 | schema     | source                     | tables                                                            |
@@ -94,6 +94,7 @@ configured PostgreSQL `type`:
 | `jaeger`   | Jaeger api_v3              | spans, services, operations                                       |
 | `datagov`  | data.gov / CKAN            | datasets, resources, organizations, groups                        |
 | `docker`   | Docker Engine API          | containers, images, volumes, networks                             |
+| `slack`    | Slack Web API              | channels, users, messages, search                                 |
 | `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery)                                     |
 
 See **[connectors.md](connectors.md)** for each connector's connection details,
