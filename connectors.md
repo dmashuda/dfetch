@@ -62,11 +62,20 @@ dfetch query "SELECT a.name, a.size_in_bytes, r.run_number, r.conclusion
 ```
 <!-- END EXAMPLES github -->
 
-**Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate;
-unauthenticated requests work but are rate-limited to 60/hour.
+**Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate. If neither
+is set, dfetch runs `params.token_command` (default: `["gh", "auth", "token"]`)
+to get a token.
 
 ```sh
 GITHUB_TOKEN=ghp_… dfetch query "SELECT * FROM github.repos WHERE owner='golang'"
+```
+
+```yaml
+sources:
+  - name: github
+    type: github
+    params:
+      token_command: ["gh", "auth", "token"]
 ```
 
 ## Jaeger — schema `jaeger`

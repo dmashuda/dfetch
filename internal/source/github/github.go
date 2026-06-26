@@ -7,12 +7,15 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -28,14 +31,18 @@ const maxPages = 10
 
 // Connector talks to the GitHub REST API.
 type Connector struct {
-	client  *http.Client
-	baseURL string
-	token   string
+	client       *http.Client
+	baseURL      string
+	tokenCommand []string
+
+	tokenOnce sync.Once
+	token     string
+	tokenErr  error
 }
 
 // New builds a GitHub connector. Supported params: "base_url" (override the API
-// host, used in tests/Enterprise). The token comes from $GITHUB_TOKEN or
-// $GH_TOKEN; unauthenticated requests work but are heavily rate-limited.
+// host, used in tests/Enterprise) and "token_command" (fallback argv used to
+// fetch a token when $GITHUB_TOKEN / $GH_TOKEN are unset).
 func New(params map[string]any) (source.Connector, error) {
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
@@ -44,13 +51,81 @@ func New(params map[string]any) (source.Connector, error) {
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		baseURL: defaultBaseURL,
-		token:   firstEnv("GITHUB_TOKEN", "GH_TOKEN"),
+		baseURL:      defaultBaseURL,
+		tokenCommand: []string{},
+		token:        firstEnv("GITHUB_TOKEN", "GH_TOKEN"),
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
+	if raw, ok := params["token_command"]; ok {
+		cmd, err := stringListParam("token_command", raw)
+		if err != nil {
+			return nil, err
+		}
+		c.tokenCommand = cmd
+	}
 	return c, nil
+}
+
+// getToken resolves the token once, on first use. Connectors are built eagerly
+// for every query (engine.New), so token_command is deferred to Scan to avoid
+// shelling out on queries that never touch github.*.
+func (c *Connector) getToken(ctx context.Context) (string, error) {
+	if c.token != "" || len(c.tokenCommand) == 0 {
+		return c.token, nil
+	}
+	c.tokenOnce.Do(func() { c.token, c.tokenErr = runTokenCommand(ctx, c.tokenCommand) })
+	return c.token, c.tokenErr
+}
+
+func runTokenCommand(ctx context.Context, cmd []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// #nosec G204 -- token_command is explicit user configuration and is run
+	// directly without a shell.
+	out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).Output()
+	if err != nil {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
+			stderr := strings.TrimRight(string(ee.Stderr), "\n")
+			if stderr != "" {
+				return "", fmt.Errorf("token_command %q: %w: %s", cmd, err, stderr)
+			}
+		}
+		return "", fmt.Errorf("token_command %q: %w", cmd, err)
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+func stringListParam(name string, raw any) ([]string, error) {
+	switch v := raw.(type) {
+	case []string:
+		return cleanStringList(name, v)
+	case []any:
+		items := make([]string, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("github: %s[%d] must be a string", name, i)
+			}
+			items[i] = s
+		}
+		return cleanStringList(name, items)
+	default:
+		return nil, fmt.Errorf("github: %s must be a list of strings", name)
+	}
+}
+
+func cleanStringList(name string, items []string) ([]string, error) {
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, fmt.Errorf("github: %s[%d] must not be empty", name, i)
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func firstEnv(keys ...string) string {
@@ -77,6 +152,9 @@ func (c *Connector) Tables() []source.TableSchema {
 
 // Scan dispatches to the per-table fetchers, which emit one chunk per API page.
 func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	if _, err := c.getToken(ctx); err != nil {
+		return err
+	}
 	switch req.Table {
 	case "issues":
 		return c.scanIssues(ctx, req, emit)

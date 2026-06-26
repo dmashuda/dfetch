@@ -10,6 +10,14 @@
 #     type: jaeger
 #     params:
 #       base_url: http://jaeger.example.com:16686
+#
+# To authenticate GitHub with the gh CLI instead of environment variables:
+# sources:
+#   - name: github
+#     type: github
+#     params:
+#       token_command: ["gh", "auth", "token"]
+#
 
 queries:
   # Latest error spans for a service (defaults to a 1-hour window in Jaeger).
