@@ -9,6 +9,22 @@
 - **Java** — only to regenerate the SQL parser (`make generate`); normal builds
   don't need it (the generated code is committed).
 
+Alternatively, use Nix:
+
+```sh
+# with direnv (recommended):
+# optional but highly recommended: also install `nix-direnv`
+# which provides better/smarter caching for Nix derivations
+# https://github.com/nix-community/nix-direnv
+echo "use flake" > .envrc
+direnv allow
+
+# with just nix:
+nix develop
+# or if you use a different shell like Fish you can do
+nix develop --command fish
+```
+
 ## Build and test
 
 ```sh
