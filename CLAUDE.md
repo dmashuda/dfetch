@@ -116,3 +116,11 @@ example blocks. The target doc is the Makefile's `EXAMPLES_DOC` (`connectors.md`
 `make fmt-check` (Prettier) on push/PR to `main`. Releases build per-OS natively
 (cgo can't cross-compile cleanly from one runner) — see
 `.github/workflows/release.yaml`.
+
+`.github/workflows/nix-vendor-hash.yaml` keeps the flake's `vendorHash` in sync:
+on Dependabot PRs that touch `go.mod`/`go.sum` it recomputes the modules hash
+(force a `lib.fakeHash` mismatch, read the `got:` hash back) and pushes the
+corrected `flake.nix` onto the PR branch, so `test-nix-build` stops failing on
+dependency bumps. Pushes made with `GITHUB_TOKEN` don't re-trigger CI; add a PAT
+as the **Dependabot** secret `NIX_VENDOR_AUTOFIX_TOKEN` to make required checks
+re-run hands-off.

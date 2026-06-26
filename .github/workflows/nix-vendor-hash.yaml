@@ -1,0 +1,94 @@
+name: Nix vendorHash autofix
+
+# Dependabot bumps go.mod/go.sum but doesn't know about the Nix flake, so the
+# pinned `vendorHash` in flake.nix goes stale and `test-nix-build` fails with a
+# hash mismatch. This workflow recomputes the hash on those PRs and pushes the
+# corrected flake.nix back onto the PR branch.
+on:
+  pull_request:
+    branches: [main]
+    # Only Go dependency changes can move the vendorHash. Skip the (expensive)
+    # Nix build for github-actions / nix ecosystem bumps.
+    paths:
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nix-vendor-autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    # Dependabot pushes its branches into this repo (not a fork), so the bot
+    # token can push the fix back. Restrict to Dependabot to avoid pushing onto
+    # arbitrary contributor PRs.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: wimpysworld/nothing-but-nix@687c797a730352432950c707ab493fcc951818d7 # v10
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.head_ref }}
+          # A PAT stored as a *Dependabot* secret lets the pushed fix re-trigger
+          # CI (test-nix-build) so required checks go green hands-off. Without it
+          # the fix is still committed, but pushes made with GITHUB_TOKEN do not
+          # start new workflow runs — re-run test-nix-build manually if it's a
+          # required check.
+          token: ${{ secrets.NIX_VENDOR_AUTOFIX_TOKEN || github.token }}
+
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: dfetch
+          # Dependabot runs without repo secrets, so authToken is empty: the
+          # cache is read-only here (pushes happen on main). Never push from a PR.
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          skipPush: true
+
+      - name: Recompute vendorHash
+        id: rehash
+        run: |
+          set -euo pipefail
+          flake=flake.nix
+          orig=$(grep -oP 'vendorHash = "\K[^"]+' "$flake")
+          fake="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" # lib.fakeHash
+
+          # Force a mismatch so Nix prints the real content hash of the modules.
+          sed -i "s|vendorHash = \"[^\"]*\"|vendorHash = \"$fake\"|" "$flake"
+          out=$(nix build .# 2>&1) && rc=0 || rc=$?
+          new=$(printf '%s\n' "$out" | awk '/got:/{print $2; exit}')
+
+          if [ -z "$new" ]; then
+            echo "::notice::No hash mismatch detected (rc=$rc); leaving flake.nix unchanged."
+            git checkout -- "$flake"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$new" = "$orig" ]; then
+            echo "::notice::vendorHash already correct ($orig)."
+            git checkout -- "$flake"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i "s|vendorHash = \"[^\"]*\"|vendorHash = \"$new\"|" "$flake"
+          echo "::notice::vendorHash $orig -> $new"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify full build with the new hash
+        if: steps.rehash.outputs.changed == 'true'
+        run: nix build .#
+
+      - name: Commit and push fix
+        if: steps.rehash.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.nix
+          git commit -m "build(nix): update vendorHash for dependency bump"
+          git push origin HEAD:${{ github.head_ref }}
