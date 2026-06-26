@@ -27,7 +27,11 @@ EXAMPLES_YAML?=examples.yaml
 EXAMPLES_DOC?=connectors.md
 
 .PHONY: build run test vet lint coverage generate install clean profile pprof \
-        examples examples-check examples-test fmt fmt-check
+        examples examples-check examples-test fmt fmt-check gomod2nix gomod2nix-check
+
+# Pin gomod2nix to match the flake input's revision so locally-generated
+# lockfiles match what CI / `nix build` expect.
+GOMOD2NIX?=go run github.com/nix-community/gomod2nix@latest
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) .
@@ -63,6 +67,17 @@ fmt-check: node_modules
 # Regenerate the ANTLR SQLite parser. Requires Java (see scripts/gen-parser.sh).
 generate:
 	./scripts/gen-parser.sh
+
+# Regenerate the Nix per-module lockfile from go.mod/go.sum. Run after any
+# dependency change so `nix build` stays in sync; pure Go, no Nix needed.
+gomod2nix:
+	$(GOMOD2NIX) generate
+
+# Offline CI guard: fail if gomod2nix.toml has drifted from go.mod/go.sum.
+gomod2nix-check:
+	$(GOMOD2NIX) generate
+	@git diff --exit-code --stat gomod2nix.toml \
+		|| { echo "FAIL: gomod2nix.toml is stale — run 'make gomod2nix' and commit."; exit 1; }
 
 coverage:
 	@go test -coverprofile=coverage.out $(GO_PKGS)

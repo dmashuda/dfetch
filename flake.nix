@@ -11,6 +11,13 @@
         flake-utils.follows = "flake-utils";
       };
     };
+    gomod2nix = {
+      url = "github:nix-community/gomod2nix";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        flake-utils.follows = "flake-utils";
+      };
+    };
   };
 
   outputs =
@@ -19,13 +26,17 @@
       nixpkgs,
       flake-utils,
       go-overlay,
+      gomod2nix,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [ go-overlay.overlays.default ];
+          overlays = [
+            go-overlay.overlays.default
+            gomod2nix.overlays.default
+          ];
         };
 
         # go-overlay tracks every Go release within hours, so fromGoMod resolves
@@ -36,11 +47,14 @@
         version = self.shortRev or self.dirtyShortRev or "dev";
       in
       {
-        packages.default = (pkgs.buildGoModule.override { inherit go; }) {
+        packages.default = pkgs.buildGoApplication {
           pname = "dfetch";
-          inherit version;
+          inherit version go;
           src = ./.;
-          vendorHash = "sha256-TTytsW0P2pzCaK1TS2qwN30nKzREQ4ZIGSgwGovHwnU=";
+          # Per-module hashes live in the committed gomod2nix.toml (regenerate
+          # with `make gomod2nix` after any go.mod/go.sum change), so dependency
+          # bumps no longer require recomputing a single repo-wide vendorHash.
+          modules = ./gomod2nix.toml;
           # mattn/go-sqlite3 bundles its own SQLite C source, so cgo needs only a
           # C compiler (provided by stdenv); no system sqlite dependency.
           env.CGO_ENABLED = "1";
@@ -70,6 +84,7 @@
             pkgs.goreleaser # release builds
             pkgs.jdk # make generate (ANTLR parser regen)
             pkgs.sqlite # poke localdb / ad-hoc SQL
+            pkgs.gomod2nix # make gomod2nix (regen lockfile after dep bumps)
           ];
         };
       }

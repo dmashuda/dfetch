@@ -1,0 +1,57 @@
+name: gomod2nix lockfile autofix
+
+# Dependabot bumps go.mod/go.sum but doesn't regenerate the Nix per-module
+# lockfile (gomod2nix.toml), so `nix build` / test-nix-build fail until it's
+# refreshed. This workflow regenerates it on those PRs and pushes the result
+# back onto the PR branch. gomod2nix is pure Go, so no Nix is needed here.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gomod2nix-autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    # Dependabot pushes its branches into this repo (not a fork), so the token
+    # can push the fix back. Restrict to Dependabot to avoid touching arbitrary
+    # contributor PRs.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.head_ref }}
+          # A PAT stored as a *Dependabot* secret lets the pushed fix re-trigger
+          # CI (test-nix-build) so required checks go green hands-off. Without it
+          # the fix is still committed, but pushes made with GITHUB_TOKEN do not
+          # start new workflow runs — re-run test-nix-build manually if it's a
+          # required check.
+          token: ${{ secrets.GOMOD2NIX_AUTOFIX_TOKEN || github.token }}
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Regenerate gomod2nix.toml
+        run: make gomod2nix
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet gomod2nix.toml; then
+            echo "::notice::gomod2nix.toml already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gomod2nix.toml
+          git commit -m "build(nix): regenerate gomod2nix.toml for dependency bump"
+          git push origin HEAD:${{ github.head_ref }}

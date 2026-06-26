@@ -112,7 +112,16 @@ example blocks. The target doc is the Makefile's `EXAMPLES_DOC` (`connectors.md`
 
 ## CI
 
-`.github/workflows/ci.yaml` runs build, `make coverage`, golangci-lint, and
-`make fmt-check` (Prettier) on push/PR to `main`. Releases build per-OS natively
-(cgo can't cross-compile cleanly from one runner) — see
-`.github/workflows/release.yaml`.
+`.github/workflows/ci.yaml` runs build, `make coverage`, golangci-lint,
+`make fmt-check` (Prettier), and `make gomod2nix-check` on push/PR to `main`.
+Releases build per-OS natively (cgo can't cross-compile cleanly from one runner)
+— see `.github/workflows/release.yaml`.
+
+The flake builds with gomod2nix: per-module hashes live in the committed
+`gomod2nix.toml`, not a single `vendorHash`. After any `go.mod`/`go.sum` change,
+run `make gomod2nix` and commit the regenerated lockfile (`make gomod2nix-check`
+is the offline CI guard; `nix build` is the real gate). On Dependabot Go bumps,
+`.github/workflows/gomod2nix.yaml` regenerates and pushes the lockfile onto the
+PR branch automatically. Pushes made with `GITHUB_TOKEN` don't re-trigger CI; add
+a PAT as the **Dependabot** secret `GOMOD2NIX_AUTOFIX_TOKEN` to make required
+checks re-run hands-off.
