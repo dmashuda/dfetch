@@ -61,8 +61,9 @@ func scanChunkSizes(c source.Connector, req source.ScanRequest) ([]int, error) {
 func TestTables(t *testing.T) {
 	c, err := New(nil)
 	require.NoError(t, err)
-	var names []string
-	for _, ts := range c.Tables() {
+	tables := c.Tables()
+	names := make([]string, 0, len(tables))
+	for _, ts := range tables {
 		names = append(names, ts.Name)
 		assert.NotEmpty(t, ts.Columns, "table %q has no columns", ts.Name)
 	}
