@@ -6,7 +6,7 @@ require (
 	github.com/XSAM/otelsql v0.42.0
 	github.com/antlr4-go/antlr/v4 v4.13.1
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/mattn/go-sqlite3 v1.14.46
+	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
