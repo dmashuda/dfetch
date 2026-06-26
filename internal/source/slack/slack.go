@@ -350,15 +350,6 @@ func limitSafe(req source.ScanRequest, allowed ...string) bool {
 	return len(req.OrderBy) == 0 && consumedAll(req, allowed...)
 }
 
-// isRange reports whether op is a comparison that maps to an oldest/latest bound.
-func isRange(op sqlparse.Operator) bool {
-	switch op {
-	case sqlparse.OpGt, sqlparse.OpGte, sqlparse.OpLt, sqlparse.OpLte, sqlparse.OpBetween:
-		return true
-	}
-	return false
-}
-
 func colNames(cols []source.Column) []string {
 	names := make([]string, len(cols))
 	for i, c := range cols {

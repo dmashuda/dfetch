@@ -419,8 +419,9 @@ func TestAuthHeaderCommandError(t *testing.T) {
 	assert.False(t, called, "scan must not hit the API when auth fails")
 }
 
-// messages LIMIT is pushed when the only filters are channel equality + a ts
-// range and the order is ts DESC (matching the API's newest-first order).
+// messages LIMIT is pushed when the only filters are channel equality + an
+// inclusive ts bound and the order is ts DESC (matching the API's newest-first
+// order).
 func TestMessagesLimitPushedWithTsDesc(t *testing.T) {
 	var gotLimit string
 	pages := 0
@@ -434,7 +435,7 @@ func TestMessagesLimitPushedWithTsDesc(t *testing.T) {
 		Table: "messages",
 		Filters: []source.Filter{
 			eqFilter("channel", "C1"),
-			{Column: "ts", Op: sqlparse.OpGt, Value: int64(0)},
+			{Column: "ts", Op: sqlparse.OpGte, Value: int64(0)},
 		},
 		OrderBy: []source.OrderTerm{{Column: "ts", Desc: true}},
 		Limit:   intPtr(2),
@@ -449,8 +450,31 @@ func TestMessagesLimitPushedWithTsDesc(t *testing.T) {
 	assert.Equal(t, "", asString(true))
 }
 
-// messages LIMIT is NOT pushed when an unsupported filter is present, or when the
-// order is ts ASC (opposite the API's order).
+// Both ends of a ts window (ts > A AND ts < B) must be pushed as oldest+latest;
+// req.Filter would return only the first, silently dropping one bound.
+func TestMessagesTsBothBoundsPushed(t *testing.T) {
+	var gotQuery string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "messages",
+		Filters: []source.Filter{
+			eqFilter("channel", "C1"),
+			{Column: "ts", Op: sqlparse.OpGt, Value: "100.0"},
+			{Column: "ts", Op: sqlparse.OpLt, Value: "200.0"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, gotQuery, "oldest=100.0")
+	assert.Contains(t, gotQuery, "latest=200.0")
+	assert.Contains(t, gotQuery, "inclusive=true")
+}
+
+// messages LIMIT is NOT pushed when an unsupported filter is present, when the
+// order is ts ASC (opposite the API's order), or when a ts bound is exclusive
+// (>/<), since the inclusive API window could return a boundary row SQLite drops.
 func TestMessagesLimitNotPushed(t *testing.T) {
 	cases := []source.ScanRequest{
 		{ // ts ASC can't ride the API's newest-first order
@@ -463,6 +487,14 @@ func TestMessagesLimitNotPushed(t *testing.T) {
 			Table:   "messages",
 			Filters: []source.Filter{eqFilter("channel", "C1"), eqFilter("user", "U1")},
 			Limit:   intPtr(2),
+		},
+		{ // an exclusive ts bound can undercount a pushed LIMIT
+			Table: "messages",
+			Filters: []source.Filter{
+				eqFilter("channel", "C1"),
+				{Column: "ts", Op: sqlparse.OpGt, Value: int64(0)},
+			},
+			Limit: intPtr(2),
 		},
 	}
 	for _, req := range cases {

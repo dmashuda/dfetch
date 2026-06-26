@@ -239,14 +239,18 @@ func (c *Connector) scanMessages(ctx context.Context, req source.ScanRequest, em
 
 	q := url.Values{}
 	q.Set("channel", channel)
-	// A ts range narrows the history window via oldest/latest.
-	if oldest, latest := tsBounds(req); oldest != "" || latest != "" {
-		if oldest != "" {
-			q.Set("oldest", oldest)
-		}
-		if latest != "" {
-			q.Set("latest", latest)
-		}
+	// A ts range narrows the history window via oldest/latest, sent as an
+	// inclusive window (Slack excludes the bounds by default) so the API returns a
+	// superset; SQLite re-applies the exact ts operator verbatim.
+	oldest, latest := tsBounds(req)
+	if oldest != "" {
+		q.Set("oldest", oldest)
+	}
+	if latest != "" {
+		q.Set("latest", latest)
+	}
+	if oldest != "" || latest != "" {
+		q.Set("inclusive", "true")
 	}
 	perPage, stopAt, pushLimit := pageLimit(req, messagesLimitSafe(req))
 	q.Set("limit", strconv.Itoa(perPage))
@@ -276,21 +280,25 @@ func (c *Connector) scanMessages(ctx context.Context, req source.ScanRequest, em
 		}, emit)
 }
 
-// tsBounds derives Slack oldest/latest bounds from a ts range filter.
+// tsBounds derives Slack oldest/latest bounds from the ts range filters. It
+// combines every ts conjunct (e.g. ts > A AND ts < B) so both ends of a window
+// are pushed: req.Filter returns only the first match, which would silently drop
+// the second bound and, with a pushed LIMIT, return too few rows.
 func tsBounds(req source.ScanRequest) (oldest, latest string) {
-	f, ok := req.Filter("ts")
-	if !ok {
-		return "", ""
-	}
-	switch f.Op {
-	case sqlparse.OpGt, sqlparse.OpGte:
-		oldest = asString(f.Value)
-	case sqlparse.OpLt, sqlparse.OpLte:
-		latest = asString(f.Value)
-	case sqlparse.OpBetween:
-		if len(f.Values) == 2 {
-			oldest = asString(f.Values[0])
-			latest = asString(f.Values[1])
+	for _, f := range req.Filters {
+		if f.Column != "ts" {
+			continue
+		}
+		switch f.Op {
+		case sqlparse.OpGt, sqlparse.OpGte:
+			oldest = asString(f.Value)
+		case sqlparse.OpLt, sqlparse.OpLte:
+			latest = asString(f.Value)
+		case sqlparse.OpBetween:
+			if len(f.Values) == 2 {
+				oldest = asString(f.Values[0])
+				latest = asString(f.Values[1])
+			}
 		}
 	}
 	return oldest, latest
@@ -299,7 +307,10 @@ func tsBounds(req source.ScanRequest) (oldest, latest string) {
 // messagesLimitSafe reports whether LIMIT can be pushed to conversations.history.
 // The endpoint returns messages newest-first, so a LIMIT is exact only when every
 // filter is consumed (channel equality, ts range → oldest/latest) and the order
-// is either absent or a single ts DESC (matching the API's order).
+// is either absent or a single ts DESC (matching the API's order). Only inclusive
+// ts bounds (>=, <=, BETWEEN) qualify: an exclusive >/< maps to Slack's inclusive
+// window, so the API would return a boundary row SQLite then drops, undercounting
+// a pushed LIMIT. Such ranges still work — they just let SQLite apply the LIMIT.
 func messagesLimitSafe(req source.ScanRequest) bool {
 	for _, f := range req.Filters {
 		switch f.Column {
@@ -308,7 +319,9 @@ func messagesLimitSafe(req source.ScanRequest) bool {
 				return false
 			}
 		case "ts":
-			if !isRange(f.Op) {
+			switch f.Op {
+			case sqlparse.OpGte, sqlparse.OpLte, sqlparse.OpBetween:
+			default:
 				return false
 			}
 		default:
