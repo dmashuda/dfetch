@@ -64,11 +64,12 @@
           packages = [
             go # toolchain pinned to go.mod (cgo build)
             pkgs.gcc # C compiler for mattn/go-sqlite3
-            pkgs.gopls
-            pkgs.golangci-lint # make lint
             pkgs.gnumake
+            pkgs.golangci-lint # make lint
+            pkgs.gopls
             pkgs.goreleaser # release builds
             pkgs.jdk # make generate (ANTLR parser regen)
+            pkgs.nix-update # automatically udpate `vendorHash`
             pkgs.sqlite # poke localdb / ad-hoc SQL
           ];
         };
