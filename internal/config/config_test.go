@@ -11,7 +11,8 @@ import (
 
 func TestLoadMissingDefaultReturnsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Chdir(t.TempDir()) // no dfetch.yaml in cwd or home
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // empty XDG dir
+	t.Chdir(t.TempDir())                     // no dfetch.yaml in cwd, XDG, or home
 
 	cfg, err := Load("")
 	require.NoError(t, err)
@@ -51,6 +52,7 @@ func TestLoadMissingExplicitPathErrors(t *testing.T) {
 func TestLoadPrefersCwd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // empty XDG dir
 	require.NoError(t, os.WriteFile(filepath.Join(home, "dfetch.yaml"),
 		[]byte("sources:\n  - name: home\n    type: github\n"), 0o600))
 
@@ -65,10 +67,11 @@ func TestLoadPrefersCwd(t *testing.T) {
 	assert.Equal(t, "local", cfg.Sources[0].Name)
 }
 
-// With no dfetch.yaml in cwd, Load falls back to ~/dfetch.yaml.
+// With no dfetch.yaml in cwd or the XDG dir, Load falls back to ~/dfetch.yaml.
 func TestLoadFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // empty XDG dir
 	require.NoError(t, os.WriteFile(filepath.Join(home, "dfetch.yaml"),
 		[]byte("sources:\n  - name: home\n    type: github\n"), 0o600))
 
@@ -78,6 +81,68 @@ func TestLoadFallsBackToHome(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cfg.Sources, 1)
 	assert.Equal(t, "home", cfg.Sources[0].Name)
+}
+
+// writeXDGConfig writes a dfetch.yaml under <xdgHome>/dfetch/ and returns the
+// XDG_CONFIG_HOME dir to point at it.
+func writeXDGConfig(t *testing.T, name string) string {
+	t.Helper()
+	xdg := t.TempDir()
+	dir := filepath.Join(xdg, "dfetch")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dfetch.yaml"),
+		[]byte("sources:\n  - name: "+name+"\n    type: github\n"), 0o600))
+	return xdg
+}
+
+// $XDG_CONFIG_HOME/dfetch/dfetch.yaml wins over the ~/dfetch.yaml fallback.
+func TestLoadPrefersXDGOverHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "dfetch.yaml"),
+		[]byte("sources:\n  - name: home\n    type: github\n"), 0o600))
+	t.Setenv("XDG_CONFIG_HOME", writeXDGConfig(t, "xdg"))
+
+	t.Chdir(t.TempDir()) // empty cwd
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	require.Len(t, cfg.Sources, 1)
+	assert.Equal(t, "xdg", cfg.Sources[0].Name)
+}
+
+// A per-project ./dfetch.yaml still wins over the XDG location.
+func TestLoadPrefersCwdOverXDG(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", writeXDGConfig(t, "xdg"))
+
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, "dfetch.yaml"),
+		[]byte("sources:\n  - name: local\n    type: github\n"), 0o600))
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	require.Len(t, cfg.Sources, 1)
+	assert.Equal(t, "local", cfg.Sources[0].Name)
+}
+
+// When XDG_CONFIG_HOME is unset, the XDG tier defaults to ~/.config/dfetch.
+func TestLoadXDGDefaultsToDotConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "") // unset -> ~/.config
+	dir := filepath.Join(home, ".config", "dfetch")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dfetch.yaml"),
+		[]byte("sources:\n  - name: dotconfig\n    type: github\n"), 0o600))
+
+	t.Chdir(t.TempDir()) // empty cwd
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	require.Len(t, cfg.Sources, 1)
+	assert.Equal(t, "dotconfig", cfg.Sources[0].Name)
 }
 
 func TestLoadParsesQueries(t *testing.T) {

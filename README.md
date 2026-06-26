@@ -80,8 +80,8 @@ superset of the rows.
 | `dfetch version`              | Print the version.                                                          |
 
 `--config <path>` (global) points at a config file; the default is `./dfetch.yaml`
-in the current directory, falling back to `~/dfetch.yaml` (see
-[Configuration](#configuration)).
+in the current directory, then `$XDG_CONFIG_HOME/dfetch/dfetch.yaml`, falling back
+to `~/dfetch.yaml` (see [Configuration](#configuration)).
 
 ## Connectors
 
@@ -131,7 +131,8 @@ output is narrowed to those columns unless `--all-columns` is passed.
 dfetch works with no config. To point a connector at a non-default host, or to
 register a connector under additional schemas, create a `dfetch.yaml` in the
 directory you run dfetch from — config is per-project. dfetch looks for
-`./dfetch.yaml` first and falls back to `~/dfetch.yaml`; `--config <path>`
+`./dfetch.yaml` first, then `$XDG_CONFIG_HOME/dfetch/dfetch.yaml` (defaulting to
+`~/.config/dfetch/dfetch.yaml`), and falls back to `~/dfetch.yaml`; `--config <path>`
 overrides both. Each `sources` entry binds a SQL schema `name` to a connector
 `type`, with connector-specific `params`:
 

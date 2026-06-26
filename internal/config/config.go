@@ -66,10 +66,30 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, fileName), nil
 }
 
-// discoverPath returns the default config path: ./dfetch.yaml in the current
-// working directory when it exists, otherwise the home-directory fallback
-// (~/dfetch.yaml). This makes config per-project by default while still allowing
-// a machine-wide config.
+// xdgConfigPath returns the XDG config location for dfetch:
+// $XDG_CONFIG_HOME/dfetch/dfetch.yaml, or ~/.config/dfetch/dfetch.yaml when
+// XDG_CONFIG_HOME is unset. It deliberately applies XDG semantics on every
+// platform — unlike os.UserConfigDir, which maps to ~/Library/Application
+// Support on macOS.
+func xdgConfigPath() (string, error) {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving home dir: %w", err)
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "dfetch", fileName), nil
+}
+
+// discoverPath returns the default config path, in precedence order:
+//  1. ./dfetch.yaml in the current working directory (per-project), when present;
+//  2. $XDG_CONFIG_HOME/dfetch/dfetch.yaml (or ~/.config/dfetch/dfetch.yaml), when present;
+//  3. the home-directory fallback (~/dfetch.yaml).
+//
+// This keeps config per-project by default, prefers the XDG location for a
+// machine-wide config, and retains ~/dfetch.yaml for backward compatibility.
 func discoverPath() (string, error) {
 	if cwd, err := os.Getwd(); err == nil {
 		local := filepath.Join(cwd, fileName)
@@ -77,13 +97,19 @@ func discoverPath() (string, error) {
 			return local, nil
 		}
 	}
+	if xdg, err := xdgConfigPath(); err == nil {
+		if _, err := os.Stat(xdg); err == nil {
+			return xdg, nil
+		}
+	}
 	return DefaultPath()
 }
 
-// Load reads the config from path. If path is empty, the default path is used
-// (./dfetch.yaml if present, else ~/dfetch.yaml). A missing default config
-// yields an empty Config rather than an error, so dfetch can run without a
-// config file present.
+// Load reads the config from path. If path is empty, the default path is
+// discovered (see discoverPath: ./dfetch.yaml, then
+// $XDG_CONFIG_HOME/dfetch/dfetch.yaml, then ~/dfetch.yaml). A missing default
+// config yields an empty Config rather than an error, so dfetch can run without
+// a config file present.
 func Load(path string) (*Config, error) {
 	usingDefault := path == ""
 	if usingDefault {
