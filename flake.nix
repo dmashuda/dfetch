@@ -75,5 +75,15 @@
           ];
         };
       }
-    );
+    )
+    // {
+      homeManagerModules = rec {
+        dfetch = import ./nix/hm-module.nix self;
+        default = dfetch;
+      };
+
+      overlays.default = final: _prev: {
+        dfetch = self.packages.${final.stdenv.hostPlatform.system}.default;
+      };
+    };
 }
