@@ -229,8 +229,8 @@ func TestScanThreads(t *testing.T) {
 	assert.Equal(t, "T1", tr[1])
 	assert.Equal(t, "help", tr[2])
 	assert.Equal(t, int64(11), tr[3])
-	assert.Equal(t, "C1", tr[4])  // parent_id
-	assert.Equal(t, "U1", tr[5])  // owner_id
+	assert.Equal(t, "C1", tr[4]) // parent_id
+	assert.Equal(t, "U1", tr[5]) // owner_id
 	assert.Equal(t, int64(3), tr[6])
 	assert.Equal(t, false, tr[8]) // archived
 	assert.Equal(t, false, tr[9]) // locked
