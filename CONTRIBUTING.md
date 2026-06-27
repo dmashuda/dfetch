@@ -104,6 +104,7 @@ internal/source/github  GitHub connector (issues, pulls, repos, commits, release
 internal/source/jaeger  Jaeger connector (spans, services, operations)
 internal/source/ckan    CKAN/data.gov connector (datasets, resources, organizations, groups)
 internal/source/docker  Docker connector (containers, images, volumes, networks), local unix socket
+internal/source/discord Discord connector (channels, members, messages, threads), REST API
 internal/source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)

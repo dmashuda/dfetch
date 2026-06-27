@@ -20,6 +20,7 @@ internal/source/github  GitHub connector (issues/pulls/repos/commits/releases/wo
 internal/source/jaeger  Jaeger connector (spans/services/operations), api_v3
 internal/source/ckan    CKAN/data.gov connector (datasets/resources/organizations/groups), Action API
 internal/source/docker  Docker connector (containers/images/volumes/networks), Engine API over the local unix socket, stdlib net/http
+internal/source/discord Discord connector (channels/members/messages/threads), REST API, stdlib net/http; auth via $DISCORD_TOKEN or params.auth_header_command (full header, verbatim)
 internal/source/postgres Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
 internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
