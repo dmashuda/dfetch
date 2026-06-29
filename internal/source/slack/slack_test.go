@@ -21,6 +21,7 @@ func intPtr(n int) *int { return &n }
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
 	t.Setenv("SLACK_TOKEN", "")
+	t.Setenv("SLACK_COOKIE", "")
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c, err := New(map[string]any{"base_url": srv.URL, "auth_header_command": []any{}})
@@ -419,6 +420,64 @@ func TestAuthHeaderCommandError(t *testing.T) {
 	assert.False(t, called, "scan must not hit the API when auth fails")
 }
 
+// cookie_command output is sent verbatim as the Cookie header.
+func TestCookieCommand(t *testing.T) {
+	t.Setenv("SLACK_TOKEN", "")
+	t.Setenv("SLACK_COOKIE", "")
+	var gotCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"base_url":       srv.URL,
+		"cookie_command": []any{"printf", "d=xoxd-from-cmd"},
+	})
+	require.NoError(t, err)
+	_, err = collectScan(c, source.ScanRequest{Table: "channels"})
+	require.NoError(t, err)
+	assert.Equal(t, "d=xoxd-from-cmd", gotCookie)
+}
+
+// $SLACK_COOKIE is sent as the "d" cookie.
+func TestSlackCookieEnv(t *testing.T) {
+	t.Setenv("SLACK_TOKEN", "")
+	t.Setenv("SLACK_COOKIE", "xoxd-env")
+	var gotCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{"base_url": srv.URL})
+	require.NoError(t, err)
+	_, err = collectScan(c, source.ScanRequest{Table: "channels"})
+	require.NoError(t, err)
+	assert.Equal(t, "d=xoxd-env", gotCookie)
+}
+
+// A failing cookie_command surfaces its error and aborts the scan.
+func TestCookieCommandError(t *testing.T) {
+	t.Setenv("SLACK_TOKEN", "")
+	t.Setenv("SLACK_COOKIE", "")
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"base_url":       srv.URL,
+		"cookie_command": []any{"false"},
+	})
+	require.NoError(t, err)
+	_, err = collectScan(c, source.ScanRequest{Table: "channels"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cookie_command")
+	assert.False(t, called, "scan must not hit the API when cookie resolution fails")
+}
+
 // messages LIMIT is pushed when the only filters are channel equality + an
 // inclusive ts bound and the order is ts DESC (matching the API's newest-first
 // order).
@@ -521,5 +580,12 @@ func TestNewRejectsBadAuthCommand(t *testing.T) {
 	_, err := New(map[string]any{"auth_header_command": "not-a-list"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth_header_command")
+	assert.True(t, strings.Contains(err.Error(), "list"))
+}
+
+func TestNewRejectsBadCookieCommand(t *testing.T) {
+	_, err := New(map[string]any{"cookie_command": "not-a-list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cookie_command")
 	assert.True(t, strings.Contains(err.Error(), "list"))
 }
