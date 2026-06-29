@@ -78,6 +78,7 @@ configured PostgreSQL `type`:
 | `datagov`  | data.gov / CKAN            | datasets, resources, organizations, groups                        |
 | `docker`   | Docker Engine API          | containers, images, volumes, networks                             |
 | `slack`    | Slack Web API              | channels, users, messages, search                                 |
+| `discord`  | Discord REST API           | channels, members, messages, threads                              |
 | `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery)                                     |
 
 See **[connectors.md](connectors.md)** for each connector's connection details,

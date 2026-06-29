@@ -284,6 +284,70 @@ sources:
 `slack.search` requires a **user token** (`xoxp-…`); bot tokens (`xoxb-…`) cannot
 call `search.messages` and the API returns `not_allowed_token_type`.
 
+## Discord — schema `discord`
+
+Backed by the [Discord REST API](https://discord.com/developers/docs/reference).
+Serves a server's (guild's) channels, members, and threads, plus a channel's
+message history, as tables.
+
+| table | rows | required filters |
+| --- | --- | --- |
+| `discord.channels` | a guild's channels | `guild_id` |
+| `discord.members` | a guild's members | `guild_id` |
+| `discord.messages` | a channel's message history | `channel` |
+| `discord.threads` | a guild's active threads | `guild_id` |
+
+Column names mirror the API fields. Snowflake ids are stored as TEXT (they exceed
+SQLite-safe integers); `roles` and `reactions` are kept as JSON strings queryable
+with SQLite's `json_extract`. `channels` and `threads` requires `guild_id`,
+`members` requires `guild_id`, and `messages` requires `channel = '<id>'`, so a
+query without them errors before any request is made. Push-down: `messages`
+accepts an exclusive `id < <snowflake>` (sent as the API `before` cursor) and a
+lower `id >`/`id >=` bound (re-applied by SQLite). An unbounded `members` /
+`messages` scan is capped (it won't page the whole history); add a `LIMIT` or
+narrower filters.
+
+```sh
+# a server's text channels
+dfetch query "SELECT id, name, position
+              FROM discord.channels
+              WHERE guild_id = '111111111111111111' AND type = 0
+              ORDER BY position"
+
+# members of a server (needs the GUILD_MEMBERS privileged intent)
+dfetch query "SELECT user_id, username, joined_at
+              FROM discord.members
+              WHERE guild_id = '111111111111111111' LIMIT 50"
+
+# recent messages in a channel, newest first
+dfetch query "SELECT id, author_username, content, timestamp
+              FROM discord.messages
+              WHERE channel = '222222222222222222'
+              ORDER BY id DESC LIMIT 50"
+
+# active threads in a server
+dfetch query "SELECT name, parent_id, message_count, archived
+              FROM discord.threads
+              WHERE guild_id = '111111111111111111'"
+```
+
+**Authentication:** Discord requires an `Authorization` header. Set
+`DISCORD_TOKEN` to a bare bot token (sent as `Bot <token>`), or configure
+`params.auth_header_command` — an argv whose stdout is used **verbatim** as the
+header value, so it can emit `Bot …`, `Bearer …`, or any scheme:
+
+```yaml
+sources:
+  - name: discord
+    type: discord
+    params:
+      # full header value, used as-is (e.g. "Bot <token>")
+      auth_header_command: ["cat", "/run/secrets/discord-auth-header"]
+```
+
+`discord.members` requires the **GUILD_MEMBERS** privileged intent enabled for
+the bot; without it the API returns a 403.
+
 ## PostgreSQL — connector type `postgres`
 
 A configured connector (no default — it needs a DSN). Each source maps **one
