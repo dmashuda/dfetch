@@ -21,6 +21,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/source/jaeger"
 	"github.com/dmashuda/dfetch/internal/source/postgres"
+	"github.com/dmashuda/dfetch/internal/source/slack"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -44,6 +45,7 @@ var builtins = map[string]source.Factory{
 	"docker":  docker.New,
 	"github":  github.New,
 	"jaeger":  jaeger.New,
+	"slack":   slack.New,
 }
 
 // connectorTypes are registered for use via config (`type: <name>`) but are NOT

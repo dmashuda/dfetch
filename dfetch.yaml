@@ -18,6 +18,15 @@
 #     params:
 #       token_command: ["gh", "auth", "token"]
 #
+# slack is built in too. Authenticate with $SLACK_TOKEN (a bare token, sent as
+# "Bearer <token>"), or run a command whose stdout is the full Authorization
+# header, used verbatim:
+# sources:
+#   - name: slack
+#     type: slack
+#     params:
+#       auth_header_command: ["cat", "/run/secrets/slack-auth-header"]
+#
 # discord is built in too. Authenticate with $DISCORD_TOKEN (a bare bot token,
 # sent as "Bot <token>"), or run a command whose stdout is the full Authorization
 # header, used verbatim:

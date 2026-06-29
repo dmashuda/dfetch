@@ -31,24 +31,7 @@ tar xzf dfetch_linux_amd64.tar.gz && sudo mv dfetch /usr/local/bin/
 dfetch version
 ```
 
-Or, for Nix users (with flakes):
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    dfetch = {
-      url = "github:dmashuda/dfetch";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = { dfetch, ... }: {
-    # reference the `dfetch.packages.${system}.default` package in your NixOS,
-    # nix-darwin, or home-manager output
-  };
-}
-```
+For Nix users, see [nix.md](./nix.md)
 
 To build from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -94,6 +77,7 @@ configured PostgreSQL `type`:
 | `jaeger`   | Jaeger api_v3              | spans, services, operations                                       |
 | `datagov`  | data.gov / CKAN            | datasets, resources, organizations, groups                        |
 | `docker`   | Docker Engine API          | containers, images, volumes, networks                             |
+| `slack`    | Slack Web API              | channels, users, messages, search                                 |
 | `discord`  | Discord REST API           | channels, members, messages, threads                              |
 | `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery)                                     |
 

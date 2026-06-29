@@ -222,6 +222,68 @@ dfetch query "SELECT json_extract(repo_tags,'\$[0]') AS tag, size
               WHERE tag IS NOT NULL ORDER BY size DESC LIMIT 10"
 ```
 
+## Slack — schema `slack`
+
+Backed by the [Slack Web API](https://api.slack.com/web). Serves your workspace's
+channels, users, and message history as tables, plus full-text `search`.
+
+| table | rows | required filters |
+| --- | --- | --- |
+| `slack.channels` | conversations (public + private) | — |
+| `slack.users` | workspace members | — |
+| `slack.messages` | a channel's message history | `channel` |
+| `slack.search` | full-text message search | `query` |
+
+Column names mirror the API fields. Nested objects are flattened (`topic`,
+`purpose` to their text; user `real_name`/`display_name`/`email`/`title` from the
+profile); `reactions` is kept as a JSON string queryable with SQLite's
+`json_extract`. Push-down covers: `messages` accepts a `ts` range → the API's
+`oldest`/`latest` window; `channels` maps `is_archived = 0` to `exclude_archived`.
+`messages` requires `channel = '<id>'` and `search` requires `query = '...'`, so a
+query without them errors before any request is made. An unbounded scan is capped
+(it won't page through the whole workspace); add a `LIMIT` or narrower filters.
+
+```sh
+# most active public + private channels
+dfetch query "SELECT name, num_members, is_private
+              FROM slack.channels
+              WHERE is_archived = 0
+              ORDER BY num_members DESC LIMIT 10"
+
+# people on the workspace (excluding bots and deactivated accounts)
+dfetch query "SELECT name, real_name, tz
+              FROM slack.users
+              WHERE is_bot = 0 AND deleted = 0 LIMIT 20"
+
+# recent messages in a channel, newest first
+dfetch query "SELECT ts, user, text
+              FROM slack.messages
+              WHERE channel = 'C0123456789'
+              ORDER BY ts DESC LIMIT 50"
+
+# search messages (needs a user token; see Authentication)
+dfetch query "SELECT ts, channel_name, username, text
+              FROM slack.search
+              WHERE query = 'deploy' LIMIT 20"
+```
+
+**Authentication:** Slack requires an `Authorization: Bearer <token>` header. Set
+`SLACK_TOKEN` to a bare token (sent as `Bearer <token>`), or configure
+`params.auth_header_command` — an argv whose stdout is used **verbatim** as the
+header value, so it can emit any scheme:
+
+```yaml
+sources:
+  - name: slack
+    type: slack
+    params:
+      # full header value, used as-is (e.g. "Bearer xoxb-…")
+      auth_header_command: ["cat", "/run/secrets/slack-auth-header"]
+```
+
+`slack.search` requires a **user token** (`xoxp-…`); bot tokens (`xoxb-…`) cannot
+call `search.messages` and the API returns `not_allowed_token_type`.
+
 ## Discord — schema `discord`
 
 Backed by the [Discord REST API](https://discord.com/developers/docs/reference).
