@@ -109,8 +109,38 @@ func TestScanIssuesLimitWithOffsetFetchesEnough(t *testing.T) {
 		Offset:  &offset,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, gotQuery, "per_page=5")
-	assert.Len(t, rows.Rows, 5) // limit + offset, not just limit
+	assert.Contains(t, gotQuery, "per_page=100") // full page even with a pushed LIMIT
+	assert.Len(t, rows.Rows, 5)                  // limit + offset, not just limit
+}
+
+// A pushed LIMIT on a PR-heavy repo may never be satisfied: the issues endpoint
+// interleaves PRs, which are dropped client-side and don't count toward the
+// LIMIT. The scan must stop after maxPages consecutive issue-free pages with a
+// truncation warning — not walk the repo's whole history in limit-sized pages.
+func TestScanIssuesPROnlyRepoBoundsPaging(t *testing.T) {
+	calls := 0
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 { // follow-up requests use the Link URL, which this test builds bare
+			assert.Equal(t, "100", r.URL.Query().Get("per_page")) // never limit-sized
+		}
+		// Every item is a PR; always advertise a next page.
+		w.Header().Set("Link", `<http://`+r.Host+r.URL.Path+`?page=next>; rel="next"`)
+		_, _ = w.Write([]byte(`[{"number":1,"state":"open","pull_request":{"url":"http://gh/pr/1"}}]`))
+	})
+
+	limit := 2
+	res, err := collectScan(c, source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("owner", "o"), eqFilter("repo", "r")},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Rows)
+	assert.Equal(t, maxPages, calls) // bounded, not the repo's entire history
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], "github.issues")
+	assert.Contains(t, res.Warnings[0], "pull requests")
 }
 
 // Fix: a multi-key ORDER BY cannot be honored by the API (one sort field), so
@@ -200,7 +230,8 @@ func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
 	assert.Contains(t, gotQuery, "state=open")
 	assert.Contains(t, gotQuery, "sort=updated")
 	assert.Contains(t, gotQuery, "direction=desc")
-	assert.Contains(t, gotQuery, "per_page=10")
+	// issues always fetches full pages: a limit-sized page could be all PRs.
+	assert.Contains(t, gotQuery, "per_page=100")
 
 	// PR excluded; owner/repo injected; columns in schema order.
 	assert.Equal(t, colNames(issuesCols), rows.Columns)

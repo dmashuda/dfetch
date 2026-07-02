@@ -251,13 +251,23 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 		q.Set("sort", sort)
 		q.Set("direction", dir)
 	}
-	perPage, stopAt, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
-	q.Set("per_page", strconv.Itoa(perPage))
+	// The issues endpoint interleaves pull requests with the issues and offers
+	// no server-side way to exclude them (only the pull_request marker on each
+	// item), so PRs are dropped client-side below. That breaks pageLimit's
+	// assumptions: a page may contribute fewer than per_page rows, so per_page
+	// stays at a full page regardless of the pushed LIMIT (a limit-sized page
+	// could be all PRs); and a pushed LIMIT may never be satisfied, so instead
+	// of paging unconditionally until stopAt, the scan gives up (with a warning)
+	// after maxPages consecutive pages that yielded no issues, rather than
+	// walking a PR-heavy repo's entire history.
+	_, stopAt, pushLimit := pageLimit(req, limitSafe(req, sortOK, "owner", "repo", "state"))
+	q.Set("per_page", "100")
 
 	start := c.baseURL + "/repos/" + escapePath(owner) + "/" + escapePath(repo) + "/issues?" + q.Encode()
 
-	sent := 0
-	for next, pages := start, 0; next != "" && (pushLimit || pages < maxPages); pages++ {
+	sent, idle := 0, 0
+	next := start
+	for pages := 0; next != "" && (pushLimit || pages < maxPages); pages++ {
 		var items []ghIssue
 		next, err = c.getJSON(ctx, next, &items)
 		if err != nil {
@@ -288,6 +298,14 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 		}
 		if pushLimit && sent >= stopAt {
 			return nil
+		}
+		if len(page) > 0 {
+			idle = 0
+			continue
+		}
+		idle++
+		if pushLimit && idle >= maxPages && next != "" {
+			return emit(source.Warn("github.issues: stopped after %d consecutive pages of pull requests only (the issues endpoint interleaves PRs, which don't count toward a LIMIT); results may be incomplete — narrow the filters", maxPages))
 		}
 	}
 	return nil
