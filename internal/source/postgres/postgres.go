@@ -305,10 +305,13 @@ func normalize(v any) any {
 	case float32:
 		return float64(x)
 	case time.Time:
-		// Normalize to UTC so the RFC3339 text sorts chronologically (lexical ==
-		// chronological only when the offset is constant); this is what makes
-		// pushing ORDER BY on a timestamp column safe (see orderPushSafe).
-		return x.UTC().Format(time.RFC3339Nano)
+		// Normalize to UTC in a fixed-width format so the text sorts
+		// chronologically; this is what makes pushing ORDER BY on a timestamp
+		// column safe (see orderPushSafe). Lexical == chronological needs both a
+		// constant offset AND a constant width: RFC3339Nano trims trailing zeros,
+		// making "…05Z" sort after "…05.5Z" ('Z' > '.'). Six fractional digits
+		// cover Postgres's microsecond precision.
+		return x.UTC().Format("2006-01-02T15:04:05.000000Z")
 	default:
 		return fmt.Sprintf("%v", x)
 	}
