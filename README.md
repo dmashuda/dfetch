@@ -150,6 +150,11 @@ dfetch query "SELECT number, title FROM github.issues
 # open http://localhost:16686 and pick service "dfetch"
 ```
 
+To additionally ship traces to an external backend (e.g. New Relic), copy
+`docker-compose.override.example.yml` to `docker-compose.override.yml`
+(gitignored) — it layers `otel-collector.newrelic.yaml` onto the collector,
+keyed by `$NEW_RELIC_LICENSE_KEY`. The default stack stays local-only.
+
 Each query is one trace:
 
 ```

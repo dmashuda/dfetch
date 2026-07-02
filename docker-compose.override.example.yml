@@ -1,0 +1,22 @@
+# Opt-in local compose overrides. To also send traces to New Relic (the
+# default stack only feeds the local Jaeger):
+#
+#   1. copy this file to docker-compose.override.yml (gitignored; compose
+#      loads it automatically alongside docker-compose.yml)
+#   2. export NEW_RELIC_LICENSE_KEY=<your ingest license key>
+#   3. docker compose up -d
+#
+# The override mounts the New Relic overlay config and merges it into the
+# collector via a second --config flag (see otel-collector.newrelic.yaml);
+# dfetch itself is untouched and keeps exporting to localhost:4318.
+services:
+  otel-collector:
+    command:
+      [
+        "--config=/etc/otel-collector.yaml",
+        "--config=/etc/otel-collector.newrelic.yaml",
+      ]
+    volumes:
+      - ./otel-collector.newrelic.yaml:/etc/otel-collector.newrelic.yaml:ro
+    environment:
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:?export your New Relic ingest license key}
