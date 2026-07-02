@@ -136,11 +136,13 @@ sources:
 
 dfetch is instrumented with OpenTelemetry. Tracing is **off unless an OTLP
 endpoint is configured** — without it there's no exporter and effectively no
-overhead. To capture traces for debugging, run the bundled Jaeger and point
-dfetch at it:
+overhead. To capture traces for debugging, run the bundled OpenTelemetry
+Collector + Jaeger stack and point dfetch at the collector (which batches and
+forwards to Jaeger — swap or add exporters in `otel-collector.yaml` without
+touching dfetch):
 
 ```sh
-docker compose up -d                                   # Jaeger (UI on :16686)
+docker compose up -d                # otel-collector (:4318) -> Jaeger (UI :16686)
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 dfetch query "SELECT number, title FROM github.issues
               WHERE owner='golang' AND repo='go' AND state='open'

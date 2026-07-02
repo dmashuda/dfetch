@@ -62,11 +62,15 @@ unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set**, so it never interferes with norma
 runs. To inspect what a query does:
 
 ```sh
-docker compose up -d                                   # Jaeger UI on :16686
+docker compose up -d           # otel-collector (:4318) -> Jaeger (UI on :16686)
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 go run . query "<sql>"
 # open http://localhost:16686, service "dfetch"
 ```
+
+dfetch exports to the local OpenTelemetry Collector, which forwards to Jaeger
+(pipeline in `otel-collector.yaml`) — add exporters/processors there rather
+than pointing dfetch elsewhere.
 
 One query = one trace: `engine.Run → engine.loadSource → connector.scan → HTTP
 GET` (one per API page, via `otelhttp`) plus the SQLite `ATTACH/CREATE/INSERT/
