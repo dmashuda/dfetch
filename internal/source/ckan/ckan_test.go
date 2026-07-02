@@ -224,6 +224,71 @@ func TestScanDatasetsPushesDateRange(t *testing.T) {
 	assert.Equal(t, "metadata_modified:[2020-01-01T00:00:00Z TO *]", gotFq)
 }
 
+// A date range is pushed widened (inclusive whole-second bounds), so the API
+// returns a superset: LIMIT must NOT ride along, or the truncation happens
+// before SQLite drops the widened boundary rows.
+func TestScanDatasetsDateRangeDoesNotPushLimit(t *testing.T) {
+	var gotQuery url.Values
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		_, _ = w.Write([]byte(searchResp(0, `[]`)))
+	})
+	limit := 5
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "datasets",
+		Filters: []source.Filter{
+			{Column: "metadata_modified", Op: sqlparse.OpGte, Value: "2020-01-01"},
+		},
+		OrderBy: []source.OrderTerm{{Column: "metadata_modified", Desc: true}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "metadata_modified:[2020-01-01T00:00:00Z TO *]", gotQuery.Get("fq"))
+	assert.Equal(t, itoa(defaultRows), gotQuery.Get("rows")) // fq narrows, but LIMIT is NOT pushed
+}
+
+// tags:"x" matches datasets *containing* the tag while SQLite compares the
+// comma-joined list verbatim — a superset, so the fq is pushed but LIMIT is not.
+func TestScanDatasetsTagsFilterDoesNotPushLimit(t *testing.T) {
+	var gotQuery url.Values
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		_, _ = w.Write([]byte(searchResp(0, `[]`)))
+	})
+	limit := 5
+	_, err := collectScan(c, source.ScanRequest{
+		Table:   "datasets",
+		Filters: []source.Filter{eqFilter("tags", "climate")},
+		OrderBy: []source.OrderTerm{{Column: "metadata_modified", Desc: true}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `tags:"climate"`, gotQuery.Get("fq"))
+	assert.Equal(t, itoa(defaultRows), gotQuery.Get("rows"))
+}
+
+// Sub-second bounds must round outward: truncating an upper bound would exclude
+// rows in the dropped fraction from the fetch entirely (wrong rows, not a
+// superset). Lower bounds truncate down, upper bounds round up.
+func TestScanDatasetsSubSecondBoundsWiden(t *testing.T) {
+	var gotFq string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotFq = r.URL.Query().Get("fq")
+		_, _ = w.Write([]byte(searchResp(0, `[]`)))
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "datasets",
+		Filters: []source.Filter{
+			{
+				Column: "metadata_modified", Op: sqlparse.OpBetween,
+				Values: []any{"2020-01-01T10:00:00.4Z", "2020-06-01T10:00:05.7Z"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "metadata_modified:[2020-01-01T10:00:00Z TO 2020-06-01T10:00:06Z]", gotFq)
+}
+
 func TestScanDatasetsPushesSortAndLimit(t *testing.T) {
 	var gotQuery url.Values
 	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {

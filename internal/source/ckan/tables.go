@@ -224,11 +224,16 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 
 // buildDatasetParams translates the pushable filters and ORDER BY of req into
 // package_search query parameters on q, and reports whether the ORDER BY was
-// fully honored and whether every filter was consumed by the API. The two
-// together decide whether LIMIT is safe to push: an unconsumed filter or
+// fully honored and whether every filter was consumed *exactly* by the API. The
+// two together decide whether LIMIT is safe to push: an unconsumed filter or
 // unhonored order means the API result is not the exact filtered/ordered set.
 // The full-text "q" filter is handled separately by searchTerm (and is already
 // set on q by the caller), so here it just counts as consumed.
+//
+// tags and date-range filters are narrow-only: their fq is pushed to shrink the
+// fetch, but the API matches a superset of what SQLite's verbatim re-filter
+// keeps (contains-vs-equality for tags, widened bounds for ranges), so they are
+// never counted as consumed.
 func buildDatasetParams(req source.ScanRequest, q url.Values) (sortOK, consumed bool) {
 	consumed = true
 	var fq []string
@@ -236,7 +241,7 @@ func buildDatasetParams(req source.ScanRequest, q url.Values) (sortOK, consumed 
 		switch f.Column {
 		case "q":
 			continue // applied by searchTerm; an equality q is consumed
-		case "organization", "license_id", "state", "name", "tags":
+		case "organization", "license_id", "state", "name":
 			if s, ok := eqString(f); ok {
 				fq = append(fq, f.Column+":"+solrQuote(s))
 				continue
@@ -245,10 +250,24 @@ func buildDatasetParams(req source.ScanRequest, q url.Values) (sortOK, consumed 
 				fq = append(fq, f.Column+":("+strings.Join(vals, " OR ")+")")
 				continue
 			}
+		case "tags":
+			// fq tags:"x" matches datasets *containing* the tag, but the stored
+			// column is the comma-joined tag list SQLite compares verbatim — the
+			// API keeps a superset of the rows the query wants (a multi-tag
+			// dataset matches the fq but fails `tags = 'x'` locally). Push the fq
+			// to narrow the fetch, but never count it as consumed: doing so would
+			// unlock LIMIT push and truncate before SQLite re-filters.
+			if s, ok := eqString(f); ok {
+				fq = append(fq, "tags:"+solrQuote(s))
+			} else if vals, ok := inStrings(f); ok {
+				fq = append(fq, "tags:("+strings.Join(vals, " OR ")+")")
+			}
 		case "metadata_created", "metadata_modified":
+			// A date range is deliberately widened (inclusive bounds, whole
+			// seconds; see solrRange), so like tags it narrows the fetch to a
+			// superset without counting as consumed.
 			if r, ok := solrRange(f); ok {
 				fq = append(fq, f.Column+":"+r)
-				continue
 			}
 		}
 		consumed = false

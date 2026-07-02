@@ -241,31 +241,48 @@ func solrQuote(s string) string {
 // solrRange turns a range filter on a date column into a Solr range expression
 // ("[lo TO hi]", with "*" for an open end). It only succeeds when the bound(s)
 // parse as a time; otherwise the filter is left for SQLite to re-apply. The
-// gt/gte (and lt/lte) distinction is collapsed to an inclusive bound — that is a
-// superset, which the engine re-filters exactly.
+// expression always *widens* the SQL predicate: gt/gte (and lt/lte) collapse to
+// an inclusive bound, and sub-second precision rounds outward (down for a lower
+// bound, up for an upper bound, since Solr's whole-second format would otherwise
+// tighten an upper bound and drop rows). The API therefore returns a superset,
+// which the engine re-filters exactly — and which is why a range filter never
+// counts as consumed for LIMIT push (see buildDatasetParams).
 func solrRange(f source.Filter) (string, bool) {
 	switch f.Op {
 	case sqlparse.OpGt, sqlparse.OpGte:
 		if t, ok := parseTime(f.Value); ok {
-			return "[" + solrTime(t) + " TO *]", true
+			return "[" + solrTimeFloor(t) + " TO *]", true
 		}
 	case sqlparse.OpLt, sqlparse.OpLte:
 		if t, ok := parseTime(f.Value); ok {
-			return "[* TO " + solrTime(t) + "]", true
+			return "[* TO " + solrTimeCeil(t) + "]", true
 		}
 	case sqlparse.OpBetween:
 		if len(f.Values) == 2 {
 			lo, ok1 := parseTime(f.Values[0])
 			hi, ok2 := parseTime(f.Values[1])
 			if ok1 && ok2 {
-				return "[" + solrTime(lo) + " TO " + solrTime(hi) + "]", true
+				return "[" + solrTimeFloor(lo) + " TO " + solrTimeCeil(hi) + "]", true
 			}
 		}
 	}
 	return "", false
 }
 
-func solrTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
+// solrTimeFloor renders a lower bound truncated to the second (widening down).
+func solrTimeFloor(t time.Time) string {
+	return t.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z")
+}
+
+// solrTimeCeil renders an upper bound rounded up to the next whole second when
+// it carries sub-second precision (widening up).
+func solrTimeCeil(t time.Time) string {
+	u := t.UTC()
+	if u.Nanosecond() > 0 {
+		u = u.Truncate(time.Second).Add(time.Second)
+	}
+	return u.Format("2006-01-02T15:04:05Z")
+}
 
 func parseTime(v any) (time.Time, bool) {
 	s, ok := v.(string)
