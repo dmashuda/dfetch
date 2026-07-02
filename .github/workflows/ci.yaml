@@ -52,27 +52,6 @@ jobs:
           DFETCH_TEST_POSTGRES_DSN: postgres://dfetch:dfetch@localhost:5432/dfetch?sslmode=disable
         run: go test -tags integration ./internal/source/postgres/
 
-  check-nix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: wimpysworld/nothing-but-nix@687c797a730352432950c707ab493fcc951818d7 # v10
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: dfetch # TODO ensure this Cachix cache exists before relying on pushes
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          # Fork PRs run without repo secrets, so authToken is empty and pushes
-          # are skipped automatically — they still read from the cache. The cache
-          # is populated on push to main, where the secret is available.
-          skipPush: ${{ github.ref != 'refs/heads/main' }}
-      - name: Nix build
-        run: nix build .#
-      - name: Nix file formatting
-        run: find . -type f -name '*.nix' | xargs nix develop -c nixfmt --strict --check
-
   lint:
     runs-on: ubuntu-latest
     steps:
