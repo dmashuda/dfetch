@@ -279,8 +279,10 @@ func TestScanDatasetsSubSecondBoundsWiden(t *testing.T) {
 	_, err := collectScan(c, source.ScanRequest{
 		Table: "datasets",
 		Filters: []source.Filter{
-			{Column: "metadata_modified", Op: sqlparse.OpBetween,
-				Values: []any{"2020-01-01T10:00:00.4Z", "2020-06-01T10:00:05.7Z"}},
+			{
+				Column: "metadata_modified", Op: sqlparse.OpBetween,
+				Values: []any{"2020-01-01T10:00:00.4Z", "2020-06-01T10:00:05.7Z"},
+			},
 		},
 	})
 	require.NoError(t, err)
