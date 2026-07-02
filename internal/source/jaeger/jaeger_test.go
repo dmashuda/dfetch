@@ -111,12 +111,14 @@ func TestScanSpansFlattensAndMaps(t *testing.T) {
 
 	// Root span: service hoisted, kind/status mapped, duration computed, attrs JSON.
 	root := rows.Rows[0]
-	assert.Equal(t, "abc", root[0])             // trace_id
-	assert.Equal(t, "s1", root[1])              // span_id
-	assert.Nil(t, root[2])                      // parent_span_id (empty -> nil)
-	assert.Equal(t, "engine.Run", root[3])      // operation_name
-	assert.Equal(t, "dfetch", root[4])          // service_name
-	assert.Equal(t, "server", root[6])          // kind
+	assert.Equal(t, "abc", root[0])        // trace_id
+	assert.Equal(t, "s1", root[1])         // span_id
+	assert.Nil(t, root[2])                 // parent_span_id (empty -> nil)
+	assert.Equal(t, "engine.Run", root[3]) // operation_name
+	assert.Equal(t, "dfetch", root[4])     // service_name
+	assert.Equal(t, "server", root[6])     // kind
+	// start_time is fixed-width UTC text so lexical order == chronological order.
+	assert.Equal(t, "1970-01-01T00:00:01.000000000Z", root[7])
 	assert.Equal(t, int64(1000000000), root[8]) // start_time_unix_nano
 	assert.Equal(t, 500.0, root[9])             // duration_ms = (1.5e9-1e9)/1e6
 	assert.Equal(t, "error", root[10])          // status_code
@@ -156,8 +158,9 @@ func TestScanSpansPushdown(t *testing.T) {
 
 	assert.Equal(t, "dfetch", gotQuery.Get("query.service_name"))
 	assert.Equal(t, "engine.Run", gotQuery.Get("query.operation_name"))
-	assert.Equal(t, "2026-06-01T00:00:00Z", gotQuery.Get("query.start_time_min"))
-	assert.Equal(t, "2026-06-02T00:00:00Z", gotQuery.Get("query.start_time_max"))
+	// Bounds carry one second of outward slack (see parseTime).
+	assert.Equal(t, "2026-05-31T23:59:59Z", gotQuery.Get("query.start_time_min"))
+	assert.Equal(t, "2026-06-02T00:00:01Z", gotQuery.Get("query.start_time_max"))
 	assert.Equal(t, "0.005s", gotQuery.Get("query.duration_min"))
 	assert.Empty(t, gotQuery.Get("query.search_depth")) // omitted by default; the SQL LIMIT is not pushed
 }
@@ -200,12 +203,60 @@ func TestScanSpansUpperBoundOnlyTimeWindow(t *testing.T) {
 
 	max := gotQuery.Get("query.start_time_max")
 	min := gotQuery.Get("query.start_time_min")
-	assert.Equal(t, "2020-01-01T00:00:00Z", max)
+	assert.Equal(t, "2020-01-01T00:00:01Z", max) // parsed bound + 1s slack
 	tmin, err1 := time.Parse(time.RFC3339, min)
 	tmax, err2 := time.Parse(time.RFC3339, max)
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	assert.True(t, tmin.Before(tmax), "min (%s) must be before max (%s), not an inverted window", min, max)
+}
+
+// timeBounds widens parsed bounds outward so the fetched window stays a
+// superset of the rows SQLite's verbatim text comparison keeps (see parseTime):
+// one second for stored-compatible literals (Z-suffixed RFC3339, date-only), a
+// day for space-form or non-UTC-offset literals, whose lexical order against
+// the stored text diverges from chronology.
+func TestTimeBoundsSlack(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	cases := map[string]struct {
+		literal string
+		wantMin string // window min for a start_time >= literal filter
+		wantMax string // window max for a start_time <= literal filter
+	}{
+		"rfc3339 zulu": {
+			"2026-06-01T10:00:00Z",
+			"2026-06-01T09:59:59Z", "2026-06-01T10:00:01Z",
+		},
+		"rfc3339 fractional zulu": {
+			"2026-06-01T10:00:00.5Z",
+			"2026-06-01T09:59:59.5Z", "2026-06-01T10:00:01.5Z",
+		},
+		"date only": {
+			"2026-06-01",
+			"2026-05-31T23:59:59Z", "2026-06-01T00:00:01Z",
+		},
+		"space form": {
+			"2026-06-01 10:00:00",
+			"2026-05-31T10:00:00Z", "2026-06-02T10:00:00Z",
+		},
+		"non-utc offset": {
+			"2026-06-01T10:00:00+02:00", // 08:00Z
+			"2026-05-31T08:00:00Z", "2026-06-02T08:00:00Z",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			min, _ := timeBounds(source.ScanRequest{Filters: []source.Filter{
+				{Column: "start_time", Op: sqlparse.OpGte, Value: tc.literal},
+			}}, now, defaultWindow)
+			assert.Equal(t, tc.wantMin, min.UTC().Format(time.RFC3339Nano), "min")
+
+			_, max := timeBounds(source.ScanRequest{Filters: []source.Filter{
+				{Column: "start_time", Op: sqlparse.OpLte, Value: tc.literal},
+			}}, now, defaultWindow)
+			assert.Equal(t, tc.wantMax, max.UTC().Format(time.RFC3339Nano), "max")
+		})
+	}
 }
 
 // A trace_id equality uses the by-ID endpoint and needs neither service_name nor

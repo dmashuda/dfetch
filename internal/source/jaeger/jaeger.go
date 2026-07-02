@@ -226,20 +226,20 @@ func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (mi
 		}
 		switch f.Op {
 		case sqlparse.OpGt, sqlparse.OpGte:
-			if t, ok := parseTime(f.Value); ok {
-				min, minSet = t, true
+			if t, slack, ok := parseTime(f.Value); ok {
+				min, minSet = t.Add(-slack), true
 			}
 		case sqlparse.OpLt, sqlparse.OpLte:
-			if t, ok := parseTime(f.Value); ok {
-				max, maxSet = t, true
+			if t, slack, ok := parseTime(f.Value); ok {
+				max, maxSet = t.Add(slack), true
 			}
 		case sqlparse.OpBetween:
 			if len(f.Values) == 2 {
-				if t, ok := parseTime(f.Values[0]); ok {
-					min, minSet = t, true
+				if t, slack, ok := parseTime(f.Values[0]); ok {
+					min, minSet = t.Add(-slack), true
 				}
-				if t, ok := parseTime(f.Values[1]); ok {
-					max, maxSet = t, true
+				if t, slack, ok := parseTime(f.Values[1]); ok {
+					max, maxSet = t.Add(slack), true
 				}
 			}
 		}
@@ -253,17 +253,41 @@ func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (mi
 	return min, max
 }
 
-func parseTime(v any) (time.Time, bool) {
-	s, ok := v.(string)
-	if !ok {
-		return time.Time{}, false
+// parseTime parses a start_time literal and reports the outward slack the
+// derived window bound needs so the fetched window stays a superset of the
+// rows SQLite's verbatim text comparison keeps. start_time is stored as
+// fixed-width UTC RFC3339 text (see startTimeText), so:
+//
+//   - a stored-compatible literal ("2006-01-02", or a Z-suffixed
+//     "2006-01-02T15:04:05[.frac]Z") orders lexically the way it orders
+//     chronologically down to the second; one second of slack absorbs the
+//     sub-second boundary cases (e.g. stored "…00.9…Z" sorts before a bare
+//     "…00Z" upper bound but is chronologically after it);
+//   - a parseable but lexically-divergent literal (a space between date and
+//     time, or a non-UTC offset) compares by its wall-clock digits, which can
+//     disagree with chronology by up to a day ('T' sorts above ' ', so every
+//     same-day stored row exceeds a space-form literal; an offset shifts the
+//     wall-clock digits by up to ±14h) — those get a day of slack.
+func parseTime(v any) (t time.Time, slack time.Duration, ok bool) {
+	s, isStr := v.(string)
+	if !isStr {
+		return time.Time{}, 0, false
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
+			if strings.HasSuffix(s, "Z") {
+				return t, time.Second, true
+			}
+			return t, 24 * time.Hour, true // non-UTC offset: wall-clock digits diverge
 		}
 	}
-	return time.Time{}, false
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, time.Second, true
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t, 24 * time.Hour, true // space form: every same-day row sorts above it
+	}
+	return time.Time{}, 0, false
 }
 
 // durationBounds derives the api_v3 duration_min/duration_max (Go duration
