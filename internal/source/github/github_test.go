@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -211,6 +212,27 @@ func TestScanIssuesPushdownAndPRFilter(t *testing.T) {
 	assert.Equal(t, "alice", row[5])  // user_login
 	assert.Equal(t, "bug,p1", row[7]) // labels
 	assert.Nil(t, row[10])            // closed_at null
+}
+
+func TestScanDefaultsToAllStates(t *testing.T) {
+	// The GitHub API defaults issues/pulls to state=open; an unfiltered scan
+	// must request state=all so the connector returns a superset.
+	for _, table := range []string{"issues", "pulls"} {
+		t.Run(table, func(t *testing.T) {
+			var gotQuery url.Values
+			c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.Query()
+				_, _ = w.Write([]byte(`[]`))
+			})
+
+			_, err := collectScan(c, source.ScanRequest{
+				Table:   table,
+				Filters: []source.Filter{eqFilter("owner", "golang"), eqFilter("repo", "go")},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "all", gotQuery.Get("state"))
+		})
+	}
 }
 
 func TestScanIssuesRequiresOwnerRepo(t *testing.T) {

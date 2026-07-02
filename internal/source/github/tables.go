@@ -238,6 +238,9 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 	}
 
 	q := url.Values{}
+	// The API defaults to state=open; without an explicit state the connector
+	// must return every issue (a superset), not just the open ones.
+	q.Set("state", "all")
 	if state, ok := stringEq(req, "state"); ok {
 		q.Set("state", state)
 	}
@@ -303,6 +306,9 @@ func (c *Connector) scanPulls(ctx context.Context, req source.ScanRequest, emit 
 	}
 
 	q := url.Values{}
+	// The API defaults to state=open; without an explicit state the connector
+	// must return every pull request (a superset), not just the open ones.
+	q.Set("state", "all")
 	if state, ok := stringEq(req, "state"); ok {
 		q.Set("state", state)
 	}
