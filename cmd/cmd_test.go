@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -35,4 +37,35 @@ func TestVersionCommand(t *testing.T) {
 
 	require.NoError(t, rootCmd.Execute())
 	assert.Equal(t, "v9.9.9-test", strings.TrimSpace(out.String()))
+}
+
+// SetVersion also wires cobra's --version flag.
+func TestVersionFlag(t *testing.T) {
+	SetVersion("v9.9.9-test")
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"--version"})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, out.String(), "v9.9.9-test")
+}
+
+// `dfetch query -` reads the SQL from stdin. A source-free query resolves
+// entirely in the local SQLite database, so this runs offline.
+func TestQueryFromStdin(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "dfetch.yaml")
+	require.NoError(t, os.WriteFile(cfg, []byte("{}"), 0o600))
+	t.Cleanup(func() { cfgFile = "" })
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetIn(strings.NewReader("SELECT 1 AS one, 'hi' AS greeting"))
+	rootCmd.SetArgs([]string{"query", "-", "--config", cfg, "--format", "csv"})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, out.String(), "one,greeting")
+	assert.Contains(t, out.String(), "1,hi")
 }
