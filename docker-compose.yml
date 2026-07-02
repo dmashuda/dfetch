@@ -1,15 +1,33 @@
 # Local tracing backend for dfetch. Start with `docker compose up -d`, then point
-# dfetch at it: export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-# View traces at http://localhost:16686 (service: dfetch).
+# dfetch at the collector: export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# Traces flow dfetch -> otel-collector (OTLP) -> jaeger; view them at
+# http://localhost:16686 (service: dfetch).
 services:
+  # The collector fronts all telemetry ingest (see otel-collector.yaml): dfetch
+  # only ever speaks OTLP to localhost:4318, and the pipeline behind it can
+  # change (extra exporters, sampling, a different backend) without touching
+  # the app.
+  otel-collector:
+    image: otel/opentelemetry-collector:0.155.0
+    container_name: dfetch-otel-collector
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4318:4318" # OTLP/HTTP (dfetch exports here)
+      - "4317:4317" # OTLP/gRPC
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
   jaeger:
-    # Jaeger v2 (built on the OpenTelemetry Collector); OTLP is enabled by default.
+    # Jaeger v2 (built on the OpenTelemetry Collector); OTLP is enabled by
+    # default. Not published to the host — it receives only from the collector
+    # over the compose network.
     image: jaegertracing/jaeger:2.19.0
     container_name: dfetch-jaeger
     ports:
       - "16686:16686" # Jaeger UI
-      - "4318:4318" # OTLP/HTTP (dfetch exports here)
-      - "4317:4317" # OTLP/gRPC
     restart: unless-stopped
 
   # Local Postgres for the postgres connector's integration tests:
