@@ -33,7 +33,18 @@
         # it — no go.mod patching or GOTOOLCHAIN network fetch needed.
         go = pkgs.go-bin.fromGoMod ./go.mod;
 
-        version = self.shortRev or self.dirtyShortRev or "dev";
+        # rev identifies the build for `dfetch --version`; it changes on every
+        # commit, so it is injected only via ldflags — never into the derivation
+        # version below.
+        rev = self.shortRev or self.dirtyShortRev or "dev";
+
+        # version is deliberately static: it names the vendored go-modules
+        # fixed-output derivation (dfetch-<version>-go-modules), whose store
+        # path depends on that name. Embedding the git rev here gave the vendor
+        # derivation a new path every commit, so CI re-vendored all Go modules
+        # on every push instead of hitting the binary cache — it only actually
+        # changes when go.mod/go.sum (vendorHash) do.
+        version = "0";
       in
       {
         packages.default = (pkgs.buildGoModule.override { inherit go; }) {
@@ -49,7 +60,7 @@
           ldflags = [
             "-s"
             "-w"
-            "-X main.version=${version}"
+            "-X main.version=${rev}"
           ];
           meta = {
             description = "Query and join data across any data source with SQL, on demand";
