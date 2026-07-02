@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 )
 
 // Result holds the columns and rows produced by a resolved query, plus any
@@ -71,19 +72,29 @@ func (r *Result) Write(w io.Writer, format string) error {
 }
 
 func (r *Result) writeTable(w io.Writer) error {
-	if _, err := fmt.Fprintln(w, strings.Join(r.Columns, "\t")); err != nil {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, strings.Join(r.Columns, "\t")); err != nil {
 		return err
 	}
 	for _, row := range r.Rows {
-		cells := make([]string, len(row))
-		for i, v := range row {
-			cells[i] = fmt.Sprintf("%v", v)
-		}
-		if _, err := fmt.Fprintln(w, strings.Join(cells, "\t")); err != nil {
+		if _, err := fmt.Fprintln(tw, strings.Join(cells(row), "\t")); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tw.Flush()
+}
+
+// cells renders a row's values for text output; SQL NULL becomes an empty cell
+// rather than Go's "<nil>".
+func cells(row []any) []string {
+	out := make([]string, len(row))
+	for i, v := range row {
+		if v == nil {
+			continue // leave the cell empty
+		}
+		out[i] = fmt.Sprintf("%v", v)
+	}
+	return out
 }
 
 func (r *Result) writeJSON(w io.Writer) error {
@@ -108,11 +119,7 @@ func (r *Result) writeCSV(w io.Writer) error {
 		return err
 	}
 	for _, row := range r.Rows {
-		cells := make([]string, len(row))
-		for i, v := range row {
-			cells[i] = fmt.Sprintf("%v", v)
-		}
-		if err := cw.Write(cells); err != nil {
+		if err := cw.Write(cells(row)); err != nil {
 			return err
 		}
 	}

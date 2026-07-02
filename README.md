@@ -54,13 +54,13 @@ superset of the rows.
 
 ## Commands
 
-| command                       | description                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `dfetch query "<sql>"`        | Run a SQL query. `--format table\|json\|csv` (default `table`).             |
-| `dfetch run <name> [args...]` | Run a saved query, binding args to its params. `--all-columns`, `--format`. |
-| `dfetch queries`              | List saved queries with their parameters and descriptions.                  |
-| `dfetch tables [schema]`      | List available tables and columns, optionally for one schema.               |
-| `dfetch version`              | Print the version.                                                          |
+| command                       | description                                                                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `dfetch query "<sql>"`        | Run a SQL query. `--format table\|json\|csv` (default `table`). `dfetch query -` reads the SQL from stdin. |
+| `dfetch run <name> [args...]` | Run a saved query, binding args to its params. `--all-columns`, `--format`.                                |
+| `dfetch queries`              | List saved queries with their parameters and descriptions.                                                 |
+| `dfetch tables [schema]`      | List available tables and columns, optionally for one schema.                                              |
+| `dfetch version`              | Print the version (also `dfetch --version`).                                                               |
 
 `--config <path>` (global) points at a config file; the default is `./dfetch.yaml`
 in the current directory, then `$XDG_CONFIG_HOME/dfetch/dfetch.yaml`, falling back

@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 )
 
@@ -21,14 +23,17 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: false,
 }
 
-// SetVersion sets the version string reported by `dfetch version`.
+// SetVersion sets the version string reported by `dfetch version` and the
+// cobra-provided `dfetch --version` flag.
 func SetVersion(v string) {
 	version = v
+	rootCmd.Version = v
 }
 
-// Execute runs the root command.
-func Execute() error {
-	return rootCmd.Execute()
+// Execute runs the root command. Cancelling ctx (e.g. on Ctrl-C) propagates to
+// every subcommand's cmd.Context(), aborting in-flight connector scans.
+func Execute(ctx context.Context) error {
+	return rootCmd.ExecuteContext(ctx)
 }
 
 func init() {

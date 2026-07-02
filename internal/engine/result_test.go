@@ -17,10 +17,30 @@ func sampleResult() *Result {
 
 func TestResultWriteTable(t *testing.T) {
 	var sb strings.Builder
-	require.NoError(t, sampleResult().Write(&sb, "table"))
-	out := sb.String()
-	assert.Contains(t, out, "id\tname")
-	assert.Contains(t, out, "1\talice")
+	require.NoError(t, (&Result{
+		Columns: []string{"id", "name"},
+		Rows:    [][]any{{1, "alice"}, {23456, "bob"}},
+	}).Write(&sb, "table"))
+
+	// Columns are aligned (tabwriter), not tab-joined.
+	lines := strings.Split(strings.TrimRight(sb.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, "id     name", lines[0])
+	assert.Equal(t, "1      alice", lines[1])
+	assert.Equal(t, "23456  bob", lines[2])
+}
+
+// SQL NULL renders as an empty cell in text formats, not Go's "<nil>".
+func TestResultWriteNullCells(t *testing.T) {
+	r := &Result{Columns: []string{"a", "b"}, Rows: [][]any{{nil, "x"}}}
+
+	var table strings.Builder
+	require.NoError(t, r.Write(&table, "table"))
+	assert.NotContains(t, table.String(), "<nil>")
+
+	var csvOut strings.Builder
+	require.NoError(t, r.Write(&csvOut, "csv"))
+	assert.Contains(t, csvOut.String(), "\n,x")
 }
 
 func TestResultWriteJSON(t *testing.T) {
