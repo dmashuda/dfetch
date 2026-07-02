@@ -41,11 +41,12 @@ func planScan(stmt *sqlparse.Select, src sqlparse.Source, ts source.TableSchema,
 		req.OrderBy = append(req.OrderBy, source.OrderTerm{Column: o.Column, Desc: o.Desc})
 	}
 
-	// Push LIMIT/OFFSET when this source drives the result: a single-source query,
+	// Push LIMIT/OFFSET when truncating src cannot change the result rows
+	// (limitPushable) and this source drives the result: a single-source query,
 	// or a join where src is the ordering source and the join cannot drop its rows
 	// (see limitSafeForJoin). The connector additionally refuses to push unless it
 	// consumed every filter and honored the order.
-	if stmt.Limit != nil && (single || limitSafeForJoin(stmt, src)) {
+	if stmt.Limit != nil && limitPushable(stmt, src, cols, single) && (single || limitSafeForJoin(stmt, src)) {
 		if n, ok := intValue(stmt.Limit.Count); ok {
 			req.Limit = &n
 		}
@@ -137,6 +138,43 @@ func neededColumns(stmt *sqlparse.Select, src sqlparse.Source, cols map[string]b
 	}
 	sort.Strings(out)
 	return out
+}
+
+// limitPushable reports whether LIMIT/OFFSET may be offered to src at all.
+// Truncating src at LIMIT rows is only sound when the query maps source rows to
+// result rows one-for-one under the pushed ordering, so it must hold that:
+//
+//   - the AST models the whole query (an unmodeled GROUP BY/HAVING/CTE/compound
+//     aggregates over — or unions in — rows a truncated fetch would omit);
+//   - there is no DISTINCT and no expression projection (both can collapse many
+//     source rows into fewer result rows, e.g. count(*), so the first LIMIT
+//     source rows underfill the first LIMIT result rows);
+//   - every ORDER BY term made it into the pushed order: a plain column of src,
+//     not shadowed by a projection alias (SQLite resolves an unqualified ORDER BY
+//     name against output aliases first). A dropped term means the connector
+//     would honor a weaker order than the query and truncate the wrong rows.
+func limitPushable(stmt *sqlparse.Select, src sqlparse.Source, cols map[string]bool, single bool) bool {
+	if !stmt.Complete || stmt.Distinct {
+		return false
+	}
+	aliases := map[string]bool{}
+	for _, p := range stmt.Projections {
+		if p.Expr != "" {
+			return false // may aggregate (count(*)): rows collapse, LIMIT is over outputs
+		}
+		if p.Alias != "" {
+			aliases[p.Alias] = true
+		}
+	}
+	for _, o := range stmt.OrderBy {
+		if o.Column == "" || !attributable(o.Table, src, single) || !cols[o.Column] {
+			return false
+		}
+		if o.Table == "" && aliases[o.Column] {
+			return false
+		}
+	}
+	return true
 }
 
 // limitSafeForJoin reports whether LIMIT/OFFSET may be pushed to src in a

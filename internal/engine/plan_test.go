@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -165,6 +166,53 @@ func TestPlanScanNoLimitWithUsingJoin(t *testing.T) {
 
 	req := planForJoin(t, sql, 0, "t", "k")
 	assert.Nil(t, req.Limit)
+}
+
+// A single-source LIMIT may only be pushed when every ORDER BY term made it
+// into the pushed order; a dropped term (expression, unknown column) means the
+// connector would truncate under a weaker order than the query's.
+func TestPlanScanNoLimitWhenOrderTermDropped(t *testing.T) {
+	base := "SELECT owner FROM github.issues WHERE owner = 'x' ORDER BY %s LIMIT 5"
+	for name, order := range map[string]string{
+		"expression":       "length(owner)",
+		"partial coverage": "updated_at, length(owner)",
+		"unknown column":   "not_a_column",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := planFor(t, fmt.Sprintf(base, order))
+			assert.Nil(t, req.Limit)
+		})
+	}
+
+	// Fully covered plain-column order still pushes, as does no ORDER BY at all.
+	req := planFor(t, fmt.Sprintf(base, "updated_at DESC, comments"))
+	require.NotNil(t, req.Limit)
+	req = planFor(t, "SELECT owner FROM github.issues WHERE owner = 'x' LIMIT 5")
+	require.NotNil(t, req.Limit)
+}
+
+// SQLite resolves an unqualified ORDER BY name against output aliases before
+// source columns, so an alias shadowing a real column must veto LIMIT push:
+// the connector would order by its own column, not the projected one.
+func TestPlanScanNoLimitWhenOrderShadowedByAlias(t *testing.T) {
+	req := planFor(t, "SELECT updated_at AS comments FROM github.issues WHERE owner = 'x' ORDER BY comments LIMIT 5")
+	assert.Nil(t, req.Limit)
+}
+
+// DISTINCT, aggregate projections, and unmodeled clauses (GROUP BY) collapse
+// source rows into fewer result rows: LIMIT applies to the outputs, so
+// truncating the source's input rows would underfill the result.
+func TestPlanScanNoLimitWhenRowsCollapse(t *testing.T) {
+	for name, sql := range map[string]string{
+		"distinct":  "SELECT DISTINCT owner FROM github.issues WHERE repo = 'x' ORDER BY owner LIMIT 5",
+		"aggregate": "SELECT count(*) FROM github.issues WHERE owner = 'x' LIMIT 5",
+		"group by":  "SELECT owner FROM github.issues GROUP BY owner ORDER BY owner LIMIT 5",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := planFor(t, sql)
+			assert.Nil(t, req.Limit)
+		})
+	}
 }
 
 func TestPlanScanFiltersAndOrder(t *testing.T) {
