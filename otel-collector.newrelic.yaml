@@ -1,0 +1,20 @@
+# Opt-in New Relic overlay for the local collector — NOT loaded by default.
+# Enable it by copying docker-compose.override.example.yml to
+# docker-compose.override.yml (gitignored, loaded automatically by compose)
+# with NEW_RELIC_LICENSE_KEY exported in your environment.
+#
+# It is passed as a second --config: the collector deep-merges maps over
+# otel-collector.yaml and replaces lists, so the pipeline below keeps the base
+# receivers/processors while its exporter list gains New Relic alongside the
+# local Jaeger.
+exporters:
+  otlp_http/newrelic:
+    # US datacenter; EU accounts use https://otlp.eu01.nr-data.net:4318.
+    endpoint: https://otlp.nr-data.net:4318
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp_grpc/jaeger, otlp_http/newrelic]

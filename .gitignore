@@ -31,3 +31,7 @@ node_modules/
 /result
 
 .envrc
+
+# Personal compose overrides (e.g. New Relic export);
+# see docker-compose.override.example.yml
+docker-compose.override.yml
