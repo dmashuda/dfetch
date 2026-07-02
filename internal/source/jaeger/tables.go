@@ -306,11 +306,17 @@ func parseNanos(s string) int64 {
 	return n
 }
 
+// startTimeText renders a span start as fixed-width UTC RFC3339 text (nine
+// zero-padded fractional digits): with a constant offset and constant width,
+// lexical order over the column matches chronological order, so SQLite's
+// verbatim ORDER BY / range re-filters over the text behave chronologically.
+// (RFC3339Nano trims trailing zeros, which breaks this: "…05Z" sorts after
+// "…05.5Z" because 'Z' > '.'.)
 func startTimeText(nanos int64) any {
 	if nanos == 0 {
 		return nil
 	}
-	return time.Unix(0, nanos).UTC().Format(time.RFC3339Nano)
+	return time.Unix(0, nanos).UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
 
 func durationMillis(start, end int64) any {
