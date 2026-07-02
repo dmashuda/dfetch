@@ -24,6 +24,41 @@ func TestASTOrderByExpression(t *testing.T) {
 	assert.True(t, s.OrderBy[0].Desc)
 }
 
+// A NULLS FIRST/LAST modifier changes the sort in a way OrderTerm doesn't
+// model, so the whole term (modifiers included) must stay unstructured — a
+// consumer that honored the column but not the modifier would order rows
+// differently from SQLite.
+func TestASTOrderByNullsModifierIsUnstructured(t *testing.T) {
+	for sql, wantExpr := range map[string]string{
+		"SELECT * FROM t ORDER BY a NULLS FIRST":      "a NULLS FIRST",
+		"SELECT * FROM t ORDER BY a DESC NULLS LAST":  "a DESC NULLS LAST",
+		"SELECT * FROM t ORDER BY t.a ASC NULLS LAST": "t.a ASC NULLS LAST",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			s := mustParse(t, sql)
+			require.Len(t, s.OrderBy, 1)
+			// Everything (direction included) rides in Expr; Desc stays false so
+			// SQL() does not append a second DESC.
+			assert.Equal(t, OrderTerm{Expr: wantExpr}, s.OrderBy[0])
+		})
+	}
+
+	// Mixed terms: the plain column stays structured.
+	s := mustParse(t, "SELECT * FROM t ORDER BY a DESC, b NULLS FIRST")
+	require.Len(t, s.OrderBy, 2)
+	assert.Equal(t, OrderTerm{Column: "a", Desc: true}, s.OrderBy[0])
+	assert.Equal(t, OrderTerm{Expr: "b NULLS FIRST"}, s.OrderBy[1])
+}
+
+// COLLATE binds inside the expression, so a collated column is already an
+// unstructured term; it must never surface as a plain column.
+func TestASTOrderByCollateIsUnstructured(t *testing.T) {
+	s := mustParse(t, "SELECT * FROM t ORDER BY a COLLATE NOCASE DESC")
+	require.Len(t, s.OrderBy, 1)
+	assert.Empty(t, s.OrderBy[0].Column)
+	assert.Contains(t, s.OrderBy[0].Expr, "COLLATE")
+}
+
 func TestASTLimit(t *testing.T) {
 	t.Run("count only", func(t *testing.T) {
 		s := mustParse(t, "SELECT * FROM t LIMIT 10")

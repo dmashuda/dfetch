@@ -104,6 +104,7 @@ func TestRoundTrip(t *testing.T) {
 		// order by / limit
 		"SELECT * FROM t ORDER BY a",
 		"SELECT * FROM t ORDER BY a DESC, b",
+		"SELECT * FROM t ORDER BY a DESC NULLS LAST, b NULLS FIRST",
 		"SELECT * FROM t ORDER BY t.created DESC",
 		"SELECT * FROM t LIMIT 10",
 		"SELECT * FROM t LIMIT 10 OFFSET 5",

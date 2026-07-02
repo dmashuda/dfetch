@@ -37,6 +37,15 @@ func buildOrderBy(oc gen.IOrder_clauseContext) []OrderTerm {
 	terms := oc.AllOrdering_term()
 	out := make([]OrderTerm, 0, len(terms))
 	for _, ot := range terms {
+		// A NULLS FIRST/LAST or term-level COLLATE modifier is not modeled on
+		// OrderTerm. Keep the whole term (modifiers included) unstructured so
+		// consumers see an opaque ordering expression instead of a plain column
+		// — a push-down that honored the column but not the modifier would sort
+		// differently from SQLite. (Desc stays false: the text carries it.)
+		if ot.NULLS_() != nil || ot.COLLATE_() != nil {
+			out = append(out, OrderTerm{Expr: origText(ot)})
+			continue
+		}
 		term := OrderTerm{}
 		if ad := ot.Asc_desc(); ad != nil && ad.DESC_() != nil {
 			term.Desc = true
