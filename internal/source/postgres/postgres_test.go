@@ -140,7 +140,20 @@ func TestNormalize(t *testing.T) {
 	assert.Equal(t, "hi", normalize([]byte("hi")))
 	assert.Equal(t, true, normalize(true))
 	ts := time.Date(2026, 6, 21, 12, 0, 0, 0, time.FixedZone("EST", -5*3600))
-	assert.Equal(t, "2026-06-21T17:00:00Z", normalize(ts)) // coerced to UTC
+	assert.Equal(t, "2026-06-21T17:00:00.000000Z", normalize(ts)) // coerced to UTC
+}
+
+// Timestamp text must be fixed-width so lexical order matches chronological
+// order — orderPushSafe's justification for letting ORDER BY+LIMIT ride a
+// temporal column. A trimmed-fraction format (RFC3339Nano) breaks this:
+// "…05Z" sorts lexically after "…05.5Z" because 'Z' > '.'.
+func TestNormalizeTimestampOrderIsLexical(t *testing.T) {
+	early := time.Date(2026, 6, 21, 12, 0, 5, 0, time.UTC)            // whole second
+	late := time.Date(2026, 6, 21, 12, 0, 5, 500_000_000, time.UTC)   // +0.5s
+	latest := time.Date(2026, 6, 21, 12, 0, 5, 500_001_000, time.UTC) // +0.500001s
+	a, b, c := normalize(early).(string), normalize(late).(string), normalize(latest).(string)
+	assert.Less(t, a, b)
+	assert.Less(t, b, c)
 }
 
 func TestNewRequiresDSN(t *testing.T) {
