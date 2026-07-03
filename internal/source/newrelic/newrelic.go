@@ -76,16 +76,15 @@ type tableInfo struct {
 }
 
 // New builds a New Relic connector. Required: params["account_id"], and a User
-// API key from $DFETCH_NEWRELIC_API_KEY or $NEW_RELIC_API_KEY. Optional params:
-// "region" ("US" default, "EU"), "base_url" (overrides region; used by tests),
-// "max_rows" (cap on un-pushable-LIMIT scans; default and max 5000, the NRQL
-// hard cap), "nrql_timeout" (seconds, default 70, max 120). It is config-only —
+// API key from $DFETCH_NEWRELIC_API_KEY or $NEW_RELIC_API_KEY — the key is
+// checked only when a newrelic table is actually used, so a config that
+// declares this source doesn't break unrelated dfetch commands for people
+// without the env var. Optional params: "region" ("US" default, "EU"),
+// "base_url" (overrides region; used by tests), "max_rows" (cap on
+// un-pushable-LIMIT scans; default and max 5000, the NRQL hard cap),
+// "nrql_timeout" (seconds, default 70, max 120). It is config-only —
 // registered for `type: newrelic`, never auto-instantiated.
 func New(params map[string]any) (source.Connector, error) {
-	apiKey := firstEnv("DFETCH_NEWRELIC_API_KEY", "NEW_RELIC_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("newrelic: no API key; set $NEW_RELIC_API_KEY to a User API key (NerdGraph does not accept the ingest license key)")
-	}
 	account, ok := intParam(params["account_id"])
 	if !ok || account <= 0 {
 		return nil, fmt.Errorf("newrelic: params.account_id is required (your New Relic account id)")
@@ -99,7 +98,7 @@ func New(params map[string]any) (source.Connector, error) {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		baseURL:     defaultBaseURL,
-		apiKey:      apiKey,
+		apiKey:      firstEnv("DFETCH_NEWRELIC_API_KEY", "NEW_RELIC_API_KEY"),
 		account:     int64(account),
 		maxRows:     nrqlHardCap,
 		nrqlTimeout: defaultNRQLTimeout,
@@ -168,6 +167,12 @@ type gqlResponse struct {
 // with the GraphQL document. (Like engine.Run's db.query.text, the query may
 // embed literals from the user's SQL — it goes wherever traces are exported.)
 func (c *Connector) gqlPost(ctx context.Context, query string, variables map[string]any, out any) error {
+	// Every NerdGraph request funnels through here, so this is where the
+	// deferred key requirement bites: construction never needs the key, only
+	// actually using a newrelic table does.
+	if c.apiKey == "" {
+		return fmt.Errorf("newrelic: no API key; set $NEW_RELIC_API_KEY to a User API key (NerdGraph does not accept the ingest license key)")
+	}
 	spanName, queryText := "newrelic.graphql", query
 	if nrql, ok := variables["nrql"].(string); ok {
 		spanName, queryText = "newrelic.nrql", nrql
@@ -345,9 +350,11 @@ func (c *Connector) eventTableInfo(ctx context.Context, table string) (tableInfo
 		return cached, nil
 	}
 
+	// No extra wrapping: the engine's resolveTable already contextualizes with
+	// "describing <schema>.<table>", and gqlPost errors carry the newrelic prefix.
 	results, err := c.nrqlQuery(ctx, "SELECT keyset() FROM "+quoteAttr(table)+" SINCE "+keysetSince)
 	if err != nil {
-		return tableInfo{}, fmt.Errorf("newrelic: describing %q: %w", table, err)
+		return tableInfo{}, err
 	}
 	cols, boolCols := parseKeyset(results)
 	info := tableInfo{cols: cols, boolCols: boolCols}

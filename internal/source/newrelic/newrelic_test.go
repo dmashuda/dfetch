@@ -94,14 +94,8 @@ func nrdbHandler(dataJSON string) func(w http.ResponseWriter, call gqlCall) {
 }
 
 func TestNewValidation(t *testing.T) {
-	t.Setenv("DFETCH_NEWRELIC_API_KEY", "")
-	t.Setenv("NEW_RELIC_API_KEY", "")
-	_, err := New(map[string]any{"account_id": 1})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "User API key")
-
 	t.Setenv("NEW_RELIC_API_KEY", "k")
-	_, err = New(map[string]any{})
+	_, err := New(map[string]any{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "account_id")
 
@@ -114,6 +108,30 @@ func TestNewValidation(t *testing.T) {
 	c, err = New(map[string]any{"account_id": 1, "max_rows": 999999})
 	require.NoError(t, err)
 	assert.Equal(t, nrqlHardCap, c.(*Connector).maxRows)
+}
+
+// A missing API key must not break construction (a committed config would
+// otherwise fail every dfetch command for people without the env var); the
+// helpful error surfaces only when a newrelic table is actually used.
+func TestMissingKeyDeferredToUse(t *testing.T) {
+	t.Setenv("DFETCH_NEWRELIC_API_KEY", "")
+	t.Setenv("NEW_RELIC_API_KEY", "")
+	c, err := New(map[string]any{"account_id": 1})
+	require.NoError(t, err)
+
+	// Curated schemas resolve without the API, so they still work keyless.
+	_, found, err := c.(*Connector).DescribeTable(context.Background(), "entities")
+	require.NoError(t, err)
+	assert.True(t, found)
+
+	// Anything that reaches NerdGraph errors with the key guidance.
+	_, err = collectScan(c, source.ScanRequest{Table: "Span"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "User API key")
+
+	_, err = c.(*Connector).ListTables(context.Background(), source.ListOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "User API key")
 }
 
 // Curated tables resolve with zero API calls and always win over event types.
