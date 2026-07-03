@@ -463,6 +463,11 @@ func (f *flexStrings) UnmarshalJSON(b []byte) error {
 		}
 		arr = []string{s}
 	}
+	// JSON null decodes to a nil slice, which json.Marshal would render as the
+	// literal text "null" — leave the value empty so jsonOrNil stores SQL NULL.
+	if arr == nil {
+		return nil
+	}
 	j, err := json.Marshal(arr)
 	if err != nil {
 		return err

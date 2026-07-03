@@ -307,11 +307,22 @@ func timestampBounds(req source.ScanRequest, now time.Time, window time.Duration
 				}
 			}
 		case sqlparse.OpIn:
+			// IN is a disjunction: the filter as a whole bounds the window by
+			// the smallest and largest listed values — appending each value to
+			// both sides would AND them and invert the window. If any value is
+			// unparseable the filter can't bound the window at all.
+			vals := make([]int64, 0, len(f.Values))
 			for _, v := range f.Values {
-				if ms, ok := msValue(v); ok {
-					lowers = append(lowers, ms)
-					uppers = append(uppers, ms)
+				ms, ok := msValue(v)
+				if !ok {
+					vals = nil
+					break
 				}
+				vals = append(vals, ms)
+			}
+			if len(vals) > 0 {
+				lowers = append(lowers, slicesMin(vals))
+				uppers = append(uppers, slicesMax(vals))
 			}
 		}
 	}
@@ -335,14 +346,18 @@ func timestampBounds(req source.ScanRequest, now time.Time, window time.Duration
 	return since, until, hasUntil, windowed
 }
 
-// msValue extracts an epoch-ms value from a numeric filter literal.
+// msValue extracts an epoch-ms value from a numeric filter literal. Fractional
+// values are floored: the caller widens every bound 1ms outward, and
+// floor(v)-1 < v < floor(v)+1, so the window stays a superset. Rejecting them
+// instead would silently fall back to the default window — which is NOT a
+// superset of a consumed WHERE clause older than the window.
 func msValue(v any) (int64, bool) {
 	switch n := v.(type) {
 	case int64:
 		return n, true
 	case float64:
-		if n == math.Trunc(n) {
-			return int64(n), true
+		if math.Abs(n) < 1<<53 {
+			return int64(math.Floor(n)), true
 		}
 	}
 	return 0, false

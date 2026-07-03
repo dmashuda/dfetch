@@ -94,7 +94,6 @@ func New(params map[string]any) (source.Connector, error) {
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
 		// (a no-op until a tracer provider is installed).
 		client: &http.Client{
-			Timeout:   (defaultNRQLTimeout + 30) * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		baseURL:     defaultBaseURL,
@@ -116,6 +115,9 @@ func New(params map[string]any) (source.Connector, error) {
 	if n, ok := intParam(params["nrql_timeout"]); ok && n > 0 {
 		c.nrqlTimeout = min(n, 120)
 	}
+	// The HTTP timeout must outlast the server-side NRQL timeout, or a slow
+	// query gets killed client-side before NerdGraph can answer.
+	c.client.Timeout = time.Duration(c.nrqlTimeout+30) * time.Second
 	return c, nil
 }
 

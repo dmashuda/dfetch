@@ -127,6 +127,33 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 		assert.False(t, plan.Windowed)
 	})
 
+	t.Run("IN bounds the window by its min and max", func(t *testing.T) {
+		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
+			{Column: "timestamp", Op: sqlparse.OpIn, Values: []any{int64(300), int64(100), int64(200)}},
+		}})
+		assert.Contains(t, plan.NRQL, "WHERE `timestamp` IN (300, 100, 200)")
+		assert.Contains(t, plan.NRQL, "SINCE 99 UNTIL 301") // not the inverted 299..101
+		assert.False(t, plan.Windowed)
+	})
+
+	t.Run("IN with an unparseable value bounds nothing", func(t *testing.T) {
+		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
+			{Column: "timestamp", Op: sqlparse.OpIn, Values: []any{int64(100), "oops"}},
+		}})
+		assert.True(t, plan.Windowed) // default window, no partial bounds
+	})
+
+	t.Run("fractional bound is floored, not dropped", func(t *testing.T) {
+		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
+			{Column: "timestamp", Op: sqlparse.OpGt, Value: float64(1750000000000.5)},
+		}})
+		assert.Contains(t, plan.NRQL, "WHERE `timestamp` > 1750000000000.5")
+		// floor-1: still below the bound, so the window stays a superset of the
+		// consumed WHERE clause instead of falling back to the default window.
+		assert.Contains(t, plan.NRQL, "SINCE 1749999999999")
+		assert.False(t, plan.Windowed)
+	})
+
 	t.Run("conjunction takes the tightest bounds", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
 			{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(100)},

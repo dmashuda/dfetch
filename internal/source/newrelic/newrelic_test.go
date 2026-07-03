@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
@@ -108,6 +109,13 @@ func TestNewValidation(t *testing.T) {
 	c, err = New(map[string]any{"account_id": 1, "max_rows": 999999})
 	require.NoError(t, err)
 	assert.Equal(t, nrqlHardCap, c.(*Connector).maxRows)
+
+	// The HTTP timeout follows the configured NRQL timeout with headroom, so
+	// a slow-but-allowed query isn't killed client-side first.
+	c, err = New(map[string]any{"account_id": 1, "nrql_timeout": 120})
+	require.NoError(t, err)
+	assert.Equal(t, 120, c.(*Connector).nrqlTimeout)
+	assert.Equal(t, 150*time.Second, c.(*Connector).client.Timeout)
 }
 
 // A missing API key must not break construction (a committed config would
@@ -530,7 +538,9 @@ func TestScanIssuesFlexibleShapes(t *testing.T) {
 			  {"issueId":"i1","title":["High CPU"],"priority":"CRITICAL","state":["ACTIVATED"],
 			   "createdAt":1750000000000,"closedAt":null,"entityNames":["web"],"entityTypes":"APPLICATION"},
 			  {"issueId":"i2","title":"Plain title","priority":["HIGH"],"state":"CLOSED",
-			   "createdAt":1750000001000,"closedAt":1750000002000,"entityNames":[],"entityTypes":[]}
+			   "createdAt":1750000001000,"closedAt":1750000002000,"entityNames":[],"entityTypes":[]},
+			  {"issueId":"i3","title":"No entities","priority":"LOW","state":"CLOSED",
+			   "createdAt":1750000003000,"closedAt":null,"entityNames":null,"entityTypes":null}
 			],
 			"nextCursor":null}}}}}}`)
 	})
@@ -538,7 +548,7 @@ func TestScanIssuesFlexibleShapes(t *testing.T) {
 
 	rows, err := collectScan(c, source.ScanRequest{Table: "issues"})
 	require.NoError(t, err)
-	require.Len(t, rows.Rows, 2)
+	require.Len(t, rows.Rows, 3)
 
 	assert.Equal(t, "High CPU", rows.Rows[0][1])  // array title -> first element
 	assert.Equal(t, "ACTIVATED", rows.Rows[0][3]) // array state
@@ -549,6 +559,10 @@ func TestScanIssuesFlexibleShapes(t *testing.T) {
 
 	assert.Equal(t, "Plain title", rows.Rows[1][1]) // plain string title
 	assert.Equal(t, int64(1750000002000), rows.Rows[1][5])
+	assert.JSONEq(t, `[]`, rows.Rows[1][6].(string)) // empty array stays "[]"
+
+	assert.Nil(t, rows.Rows[2][6]) // JSON null -> SQL NULL, not the text "null"
+	assert.Nil(t, rows.Rows[2][7])
 }
 
 func TestScanIncidents(t *testing.T) {
