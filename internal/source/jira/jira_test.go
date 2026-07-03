@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
@@ -124,6 +125,28 @@ func TestAuthHeaderNoneConfigured(t *testing.T) {
 	h, err := c.(*Connector).getAuthHeader(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, h)
+}
+
+// Fix: the engine Scans jira tables concurrently, so getAuthHeader must be
+// race-free — every path goes through authOnce (run with -race).
+func TestGetAuthHeaderConcurrent(t *testing.T) {
+	c, err := New(map[string]any{
+		"base_url":            "https://x.atlassian.net",
+		"auth_header_command": []any{"echo", "Bearer from-command"},
+	})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h, err := c.(*Connector).getAuthHeader(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, "Bearer from-command", h)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestNewRejectsInvalidAuthHeaderCommand(t *testing.T) {
@@ -315,9 +338,12 @@ func TestScanIssuesLimitNotPushedWithUnmappableOrder(t *testing.T) {
 	res, err := collectScan(c, req)
 	require.NoError(t, err)
 	assert.Equal(t, maxPages, calls)
-	require.NotEmpty(t, res.Warnings)
-	assert.Contains(t, res.Warnings[0], "jira.issues")
-	assert.Contains(t, res.Warnings[0], "cap")
+	// Two warnings: the filterless scan got the default -30d bound, and the
+	// unpushed LIMIT ran into the page cap.
+	require.Len(t, res.Warnings, 2)
+	assert.Contains(t, res.Warnings[0], defaultBoundClause)
+	assert.Contains(t, res.Warnings[1], "jira.issues")
+	assert.Contains(t, res.Warnings[1], "cap")
 }
 
 // Fix: LIMIT push-down must account for OFFSET. With LIMIT 2 OFFSET 3 the
@@ -345,6 +371,52 @@ func TestScanIssuesLimitWithOffsetFetchesEnough(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 5, gotBody["maxResults"]) // limit + offset, not just limit
 	assert.Len(t, rows.Rows, 5)
+}
+
+// Fix: a range filter's pushed JQL bound is widened (tzSlack + minute
+// rounding), so it is NOT an exact translation — the LIMIT must not be pushed,
+// or it could be spent entirely on slack-window rows the local re-filter drops.
+func TestScanIssuesRangeFilterBlocksLimitPush(t *testing.T) {
+	var gotBody map[string]any
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBody = readBody(t, r)
+		_, _ = w.Write([]byte(issuesPage2)) // single page, no next token
+	})
+
+	limit := 2
+	req := source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{{Column: "created", Op: sqlparse.OpGte, Value: "2024-06-01T00:00:00Z"}},
+		Limit:   &limit,
+	}
+	_, err := collectScan(c, req)
+	require.NoError(t, err)
+	assert.Equal(t, `created >= "2024-05-31 00:00"`, gotBody["jql"])
+	assert.EqualValues(t, defaultPageSize, gotBody["maxResults"]) // full page, not the limit
+}
+
+// Fix: when no filter translates, the injected `created >= -30d` bound narrows
+// the result to history the query never asked for — it must surface a warning
+// and must not let a LIMIT ride the search (the top-N of the window is not the
+// top-N overall).
+func TestScanIssuesDefaultBoundWarnsAndBlocksLimit(t *testing.T) {
+	var gotBody map[string]any
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBody = readBody(t, r)
+		_, _ = w.Write([]byte(issuesPage2))
+	})
+
+	limit := 2
+	res, err := collectScan(c, source.ScanRequest{
+		Table:   "issues",
+		OrderBy: []source.OrderTerm{{Column: "created"}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, defaultBoundClause+" ORDER BY created ASC", gotBody["jql"])
+	assert.EqualValues(t, defaultPageSize, gotBody["maxResults"]) // LIMIT not pushed
+	require.NotEmpty(t, res.Warnings)
+	assert.Contains(t, res.Warnings[0], defaultBoundClause)
 }
 
 func TestScanIssuesInvalidIDErrors(t *testing.T) {
@@ -405,6 +477,28 @@ func TestScanProjectsOrderByPush(t *testing.T) {
 	assert.Equal(t, "-name", gotOrderBy)
 }
 
+// Fix: only the FIRST key filter is pushed (stringEqOrIn), so a second filter
+// on key makes a pushed LIMIT unsafe — the truncated fetch could hold only
+// rows the unpushed filter then discards.
+func TestScanProjectsTwoKeyFiltersDoNotPushLimit(t *testing.T) {
+	var gotMaxResults string
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMaxResults = r.URL.Query().Get("maxResults")
+		_, _ = w.Write([]byte(`{"values":[],"isLast":true}`))
+	})
+	limit := 1
+	_, err := collectScan(c, source.ScanRequest{
+		Table: "projects",
+		Filters: []source.Filter{
+			inFilter("key", "AAA", "BBB"),
+			eqFilter("key", "BBB"),
+		},
+		Limit: &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "100", gotMaxResults) // full page: LIMIT was not pushed
+}
+
 // --- comments ---
 
 func TestScanCommentsMissingIssueKeyErrorsWithoutRequest(t *testing.T) {
@@ -460,6 +554,35 @@ func TestScanCommentsHappyPathAndCasing(t *testing.T) {
 	assert.Nil(t, row1[2]) // author_account_id
 	assert.Nil(t, row1[4]) // body
 	assert.Nil(t, row1[7]) // is_public
+}
+
+// Fix: a zero-row page with total still ahead (comments hidden by visibility
+// restrictions, stale total) must terminate the scan — with a pushed LIMIT the
+// page cap is disabled, so without the guard the identical request would
+// repeat forever.
+func TestScanCommentsEmptyPageWithStaleTotalTerminates(t *testing.T) {
+	calls := 0
+	c := newTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"comments":[
+				{"id":"1","author":null,"body":null,"created":"2024-01-01T00:00:00.000+0000","updated":"2024-01-01T00:00:00.000+0000"}
+			],"startAt":0,"maxResults":100,"total":8}`))
+			return
+		}
+		// total says more, but nothing visible comes back.
+		_, _ = w.Write([]byte(`{"comments":[],"startAt":1,"maxResults":100,"total":8}`))
+	})
+
+	limit := 5 // pushed (single key, no other filters) -> page cap disabled
+	rows, err := collectScan(c, source.ScanRequest{
+		Table:   "comments",
+		Filters: []source.Filter{eqFilter("issue_key", "P-1")},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Len(t, rows.Rows, 1)
 }
 
 func TestScanCommentsMultipleIssueKeysDoNotPushLimit(t *testing.T) {

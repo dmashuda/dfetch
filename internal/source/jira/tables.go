@@ -3,6 +3,7 @@ package jira
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -62,11 +63,8 @@ type jiraStatus struct {
 	StatusCategory jiraNamed `json:"statusCategory"`
 }
 
-type jiraProjectRef struct {
-	Key string `json:"key"`
-}
-
-type jiraParentRef struct {
+// jiraKeyRef is any sub-object referenced by issue key (project, parent).
+type jiraKeyRef struct {
 	Key string `json:"key"`
 }
 
@@ -84,8 +82,8 @@ type jiraIssueFields struct {
 	Updated        string          `json:"updated"`
 	ResolutionDate *string         `json:"resolutiondate"`
 	DueDate        *string         `json:"duedate"`
-	Project        jiraProjectRef  `json:"project"`
-	Parent         *jiraParentRef  `json:"parent"`
+	Project        jiraKeyRef      `json:"project"`
+	Parent         *jiraKeyRef     `json:"parent"`
 }
 
 type jiraIssue struct {
@@ -165,9 +163,18 @@ func parseID(kind, ref, id string) (int64, error) {
 
 func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	plan := buildJQL(req)
-	limitOK := plan.ConsumedAll && plan.OrderOK
+	// The boundedness default blocks LIMIT push too: it narrows the result to
+	// 30 days of history the query never asked for, so a pushed LIMIT would
+	// lock in the top-N of that window as if it were the top-N overall.
+	limitOK := plan.ConsumedAll && plan.OrderOK && !plan.Defaulted
 	stopAt, pushLimit := pageLimit(req, limitOK)
 	maxResults := pageSize(stopAt, pushLimit)
+
+	if plan.Defaulted {
+		if err := emit(source.Warn("jira.issues: no filter translated to JQL, so the search was bounded to %s — filter on project_key, key, created, updated, or assignee/reporter account id for more history", defaultBoundClause)); err != nil {
+			return err
+		}
+	}
 
 	sent, token := 0, ""
 	for pages := 0; pushLimit || pages < maxPages; pages++ {
@@ -203,7 +210,10 @@ func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit
 			}
 		}
 
-		hasNext := resp.NextPageToken != nil && *resp.NextPageToken != ""
+		// An empty page means no progress — treat it as terminal even if a
+		// token came back, so a pathological response can't loop forever when
+		// pushLimit disables the page cap.
+		hasNext := resp.NextPageToken != nil && *resp.NextPageToken != "" && len(resp.Issues) > 0
 		if err := pageCapped(pushLimit, pages, hasNext, "issues", emit); err != nil {
 			return err
 		}
@@ -251,7 +261,7 @@ func issueRow(baseURL string, it jiraIssue) ([]any, error) {
 func (c *Connector) scanProjects(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	keys := stringEqOrIn(req, "key")
 
-	sortField, sortDir, sortOK := orderParam(req.OrderBy, map[string]string{"key": "key", "name": "name"})
+	sortBy, sortOK := orderParam(req.OrderBy, map[string]string{"key": "key", "name": "name"})
 	stopAt, pushLimit := pageLimit(req, projectsLimitSafe(req, sortOK))
 	maxResults := pageSize(stopAt, pushLimit)
 
@@ -260,11 +270,7 @@ func (c *Connector) scanProjects(ctx context.Context, req source.ScanRequest, em
 		q.Add("keys", k)
 	}
 	if sortOK {
-		if sortDir == "desc" {
-			q.Set("orderBy", "-"+sortField)
-		} else {
-			q.Set("orderBy", sortField)
-		}
+		q.Set("orderBy", sortBy)
 	}
 	q.Set("maxResults", strconv.Itoa(maxResults))
 
@@ -310,13 +316,18 @@ func (c *Connector) scanProjects(ctx context.Context, req source.ScanRequest, em
 	return nil
 }
 
-// projectsLimitSafe reports whether every filter in the request is an
+// projectsLimitSafe reports whether the request's at-most-one filter is an
 // equality/IN on "key" (the only column the endpoint filters on) and the
 // ordering (if any) was mapped — the conditions under which a LIMIT may ride
-// the paginated fetch.
+// the paginated fetch. Multiple filters are never limit-safe: only the first
+// is pushed (stringEqOrIn), so a second one could re-filter away rows the
+// truncated fetch already spent the LIMIT on. sortOK implies exactly one
+// ORDER BY term (orderParam enforces it).
 func projectsLimitSafe(req source.ScanRequest, sortOK bool) bool {
-	orderHonored := len(req.OrderBy) == 0 || (len(req.OrderBy) == 1 && sortOK)
-	if !orderHonored {
+	if len(req.OrderBy) > 0 && !sortOK {
+		return false
+	}
+	if len(req.Filters) > 1 {
 		return false
 	}
 	for _, f := range req.Filters {
@@ -343,17 +354,13 @@ func (c *Connector) scanComments(ctx context.Context, req source.ScanRequest, em
 		return err
 	}
 
-	sortField, sortDir, sortOK := orderParam(req.OrderBy, map[string]string{"created": "created"})
+	sortBy, sortOK := orderParam(req.OrderBy, map[string]string{"created": "created"})
 	stopAt, pushLimit := pageLimit(req, commentsLimitSafe(req, keys, sortOK))
 	maxResults := pageSize(stopAt, pushLimit)
 
 	q := url.Values{}
 	if sortOK {
-		if sortDir == "desc" {
-			q.Set("orderBy", "-"+sortField)
-		} else {
-			q.Set("orderBy", sortField)
-		}
+		q.Set("orderBy", sortBy)
 	}
 	q.Set("maxResults", strconv.Itoa(maxResults))
 
@@ -387,7 +394,10 @@ func (c *Connector) scanComments(ctx context.Context, req source.ScanRequest, em
 				}
 			}
 
-			hasNext := startAt+len(resp.Comments) < resp.Total
+			// Guard on len > 0 like scanProjects: a zero-row page with total
+			// still ahead (comments hidden by visibility restrictions, stale
+			// total) must not loop forever once pushLimit disables the cap.
+			hasNext := len(resp.Comments) > 0 && startAt+len(resp.Comments) < resp.Total
 			if err := pageCapped(pushLimit, pages, hasNext, "comments", emit); err != nil {
 				return err
 			}
@@ -407,10 +417,9 @@ func (c *Connector) scanComments(ctx context.Context, req source.ScanRequest, em
 // filter (an error is returned, without any HTTP request made, when it's
 // absent).
 func issueKeys(req source.ScanRequest) ([]string, error) {
-	const errMsg = "jira: comments requires an issue_key filter (e.g. WHERE issue_key = 'PROJ-1')"
 	keys := stringEqOrIn(req, "issue_key")
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("%s", errMsg)
+		return nil, errors.New("jira: comments requires an issue_key filter (e.g. WHERE issue_key = 'PROJ-1')")
 	}
 	return keys, nil
 }
@@ -418,13 +427,13 @@ func issueKeys(req source.ScanRequest) ([]string, error) {
 // commentsLimitSafe reports whether a LIMIT may ride the fetch: a single
 // issue_key (multiple keys means multiple independent paginated fetches, which
 // can't jointly honor one global ORDER BY + LIMIT), the ordering (if any) fully
-// mapped, and every filter besides issue_key absent.
+// mapped (sortOK implies exactly one ORDER BY term — orderParam enforces it),
+// and every filter besides issue_key absent.
 func commentsLimitSafe(req source.ScanRequest, keys []string, sortOK bool) bool {
 	if len(keys) != 1 {
 		return false
 	}
-	orderHonored := len(req.OrderBy) == 0 || (len(req.OrderBy) == 1 && sortOK)
-	if !orderHonored {
+	if len(req.OrderBy) > 0 && !sortOK {
 		return false
 	}
 	for _, f := range req.Filters {

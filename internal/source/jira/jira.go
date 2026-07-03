@@ -96,12 +96,17 @@ func New(params map[string]any) (source.Connector, error) {
 // getAuthHeader resolves the Authorization header once, on first use.
 // Connectors are built eagerly for every query (engine.New), so
 // auth_header_command is deferred to Scan to avoid shelling out on queries that
-// never touch jira.*.
+// never touch jira.*. All paths go through authOnce — the engine Scans jira
+// tables concurrently, and Once.Do is what makes the closure's write of
+// c.authHeader visible to every other goroutine's read (a bare fast-path read
+// would race with the writer).
 func (c *Connector) getAuthHeader(ctx context.Context) (string, error) {
-	if c.authHeader != "" || len(c.authHeaderCommand) == 0 {
-		return c.authHeader, nil
-	}
-	c.authOnce.Do(func() { c.authHeader, c.authErr = runHeaderCommand(ctx, c.authHeaderCommand) })
+	c.authOnce.Do(func() {
+		if c.authHeader != "" || len(c.authHeaderCommand) == 0 {
+			return // env-resolved in New, or no auth configured
+		}
+		c.authHeader, c.authErr = runHeaderCommand(ctx, c.authHeaderCommand)
+	})
 	return c.authHeader, c.authErr
 }
 
@@ -297,22 +302,22 @@ func stringEqOrIn(req source.ScanRequest, col string) []string {
 	return nil
 }
 
-// orderParam maps the first ORDER BY term to a (field, direction) pair using
-// the allowed columns; ok is false when it can't be mapped or there's more than
-// one term (the projects/comments endpoints only sort by a single field).
-func orderParam(terms []source.OrderTerm, allowed map[string]string) (field, direction string, ok bool) {
+// orderParam maps the first ORDER BY term to the ready-to-send orderBy query
+// value ("field", or "-field" for descending); ok is false when it can't be
+// mapped or there's more than one term (the projects/comments endpoints only
+// sort by a single field).
+func orderParam(terms []source.OrderTerm, allowed map[string]string) (orderBy string, ok bool) {
 	if len(terms) != 1 {
-		return "", "", false
+		return "", false
 	}
-	field, ok = allowed[terms[0].Column]
+	field, ok := allowed[terms[0].Column]
 	if !ok {
-		return "", "", false
+		return "", false
 	}
-	direction = "asc"
 	if terms[0].Desc {
-		direction = "desc"
+		return "-" + field, true
 	}
-	return field, direction, true
+	return field, true
 }
 
 // pageLimit reports how many rows to fetch before stopping early (stopAt), and

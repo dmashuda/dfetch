@@ -62,6 +62,8 @@ func TestBuildJQLBoundednessDefault(t *testing.T) {
 // literals are interpreted in the Jira user's timezone, unknown to the
 // connector; see tzSlack), then rounded outward to the minute (JQL's
 // granularity). Lower bounds land a day earlier, upper bounds a day later.
+// Because the pushed clause is a widened superset, a range filter is never
+// "consumed" — ConsumedAll stays false so a LIMIT can't ride the search.
 func TestBuildJQLDateRangeRounding(t *testing.T) {
 	cases := map[string]struct {
 		op     sqlparse.Operator
@@ -82,7 +84,7 @@ func TestBuildJQLDateRangeRounding(t *testing.T) {
 				{Column: "created", Op: tc.op, Value: tc.value},
 			}})
 			assert.Equal(t, tc.want, plan.JQL)
-			assert.True(t, plan.ConsumedAll)
+			assert.False(t, plan.ConsumedAll) // widened bound -> not exact
 		})
 	}
 
@@ -92,7 +94,7 @@ func TestBuildJQLDateRangeRounding(t *testing.T) {
 		{Column: "updated", Op: sqlparse.OpBetween, Values: []any{"2024-01-01T10:00:30Z", "2024-01-02T10:00:30Z"}},
 	}})
 	assert.Equal(t, `updated >= "2023-12-31 10:00" AND updated <= "2024-01-03 10:01"`, plan.JQL)
-	assert.True(t, plan.ConsumedAll)
+	assert.False(t, plan.ConsumedAll)
 }
 
 func TestBuildJQLBothBoundsFromSeparateFilters(t *testing.T) {
@@ -103,7 +105,21 @@ func TestBuildJQLBothBoundsFromSeparateFilters(t *testing.T) {
 		{Column: "created", Op: sqlparse.OpLte, Value: "2024-01-31T00:00:00Z"},
 	}})
 	assert.Equal(t, `created >= "2023-12-31 00:00" AND created <= "2024-02-01 00:00"`, plan.JQL)
-	assert.True(t, plan.ConsumedAll)
+	assert.False(t, plan.ConsumedAll)
+}
+
+func TestBuildJQLEmptyStringNotPushed(t *testing.T) {
+	// Jira rejects `field = ""` as invalid JQL, so an empty-string equality is
+	// left to the local re-filter instead of failing the whole query.
+	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{eqFilter("status", "")}})
+	assert.Equal(t, defaultBoundClause, plan.JQL)
+	assert.False(t, plan.ConsumedAll)
+	assert.True(t, plan.Defaulted)
+
+	// Same for an IN list containing an empty element: the whole clause drops.
+	plan = buildJQL(source.ScanRequest{Filters: []source.Filter{inFilter("key", "A-1", "")}})
+	assert.Equal(t, defaultBoundClause, plan.JQL)
+	assert.False(t, plan.ConsumedAll)
 }
 
 func TestBuildJQLUnparseableDateNotConsumed(t *testing.T) {
@@ -121,9 +137,9 @@ func TestQuoteJQLEscaping(t *testing.T) {
 }
 
 func TestJQLOrderBy(t *testing.T) {
-	clause, ok := jqlOrderBy([]source.OrderTerm{{Column: "created"}, {Column: "key", Desc: true}})
+	clause, ok := jqlOrderBy([]source.OrderTerm{{Column: "created"}, {Column: "updated", Desc: true}})
 	require.True(t, ok)
-	assert.Equal(t, "created ASC, key DESC", clause)
+	assert.Equal(t, "created ASC, updated DESC", clause)
 
 	clause, ok = jqlOrderBy([]source.OrderTerm{{Column: "due_date", Desc: true}})
 	require.True(t, ok)
@@ -133,6 +149,15 @@ func TestJQLOrderBy(t *testing.T) {
 	// ordering can be pushed at all.
 	_, ok = jqlOrderBy([]source.OrderTerm{{Column: "created"}, {Column: "summary"}})
 	assert.False(t, ok)
+
+	// key, priority, and status are deliberately unmappable: JQL sorts them
+	// semantically (keys numerically, priority/status by rank), which differs
+	// from SQLite's TEXT collation — pushing them would let a pushed LIMIT
+	// truncate the wrong prefix.
+	for _, col := range []string{"key", "priority", "status"} {
+		_, ok = jqlOrderBy([]source.OrderTerm{{Column: col}})
+		assert.False(t, ok, col)
+	}
 
 	// No ORDER BY at all is trivially "pushed" (nothing to honor).
 	clause, ok = jqlOrderBy(nil)

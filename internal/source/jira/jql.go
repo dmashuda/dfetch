@@ -22,9 +22,11 @@ const defaultBoundClause = "created >= -30d"
 type jqlPlan struct {
 	JQL string
 	// ConsumedAll is true when every filter in the request was translated into
-	// the JQL (so the API result is the exact filtered set, not a superset) —
-	// required before a LIMIT may be pushed. The boundedness default does not
-	// count against this: it's not one of the request's own filters.
+	// JQL *exactly* (so the API result is the exact filtered set, not a
+	// superset) — required before a LIMIT may be pushed. Range filters never
+	// count: their pushed clauses are deliberately widened (tzSlack + minute
+	// rounding), so a pushed LIMIT could be spent on slack-window rows the
+	// local re-filter then drops.
 	ConsumedAll bool
 	// OrderOK is true when every ORDER BY term was mapped to JQL ORDER BY (or
 	// there were none).
@@ -35,13 +37,15 @@ type jqlPlan struct {
 }
 
 // jqlOrderFields maps a jira.issues column to its JQL ORDER BY field name.
+// Only columns whose JQL sort order matches SQLite's TEXT collation on the
+// stored value are listed: created/updated/duedate sort chronologically in
+// both. key (JQL sorts numerically: PROJ-2 before PROJ-10), priority, and
+// status (JQL sorts by rank/workflow order, not name) are deliberately
+// absent — pushing them would let a pushed LIMIT truncate the wrong prefix.
 var jqlOrderFields = map[string]string{
 	"created":  "created",
 	"updated":  "updated",
-	"key":      "key",
-	"priority": "priority",
 	"due_date": "duedate",
-	"status":   "status",
 }
 
 // buildJQL translates a ScanRequest into JQL for the enhanced search endpoint.
@@ -51,10 +55,11 @@ func buildJQL(req source.ScanRequest) jqlPlan {
 	var clauses []string
 	consumedAll := true
 	for _, f := range req.Filters {
-		clause, ok := translateFilter(f)
+		clause, exact, ok := translateFilter(f)
 		if ok {
 			clauses = append(clauses, clause)
-		} else {
+		}
+		if !ok || !exact {
 			consumedAll = false
 		}
 	}
@@ -76,7 +81,10 @@ func buildJQL(req source.ScanRequest) jqlPlan {
 
 // translateFilter translates one WHERE conjunct into a JQL clause. ok is false
 // when the column or operator isn't one of the supported push-down cases.
-func translateFilter(f source.Filter) (string, bool) {
+// exact is true only when the clause matches the SQL predicate precisely;
+// range clauses are widened (see translateRange) and so are pushed to narrow
+// the fetch but never counted as consumed.
+func translateFilter(f source.Filter) (clause string, exact, ok bool) {
 	switch f.Column {
 	case "key":
 		return translateKeyish(f, "key")
@@ -99,47 +107,46 @@ func translateFilter(f source.Filter) (string, bool) {
 	case "updated":
 		return translateRange(f, "updated")
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 
-// translateEq translates a plain OpEq filter to `field = "value"`.
-func translateEq(f source.Filter, field string) (string, bool) {
+// translateEq translates a plain OpEq filter to `field = "value"`. An empty
+// string is never pushed: Jira rejects `field = ""` as invalid JQL (failing
+// the whole query), while the local re-filter handles it for free.
+func translateEq(f source.Filter, field string) (clause string, exact, ok bool) {
 	if f.Op != sqlparse.OpEq {
-		return "", false
+		return "", false, false
 	}
 	s, ok := f.Value.(string)
-	if !ok {
-		return "", false
+	if !ok || s == "" {
+		return "", false, false
 	}
-	return field + " = " + quoteJQL(s), true
+	return field + " = " + quoteJQL(s), true, true
 }
 
 // translateKeyish translates an OpEq or OpIn filter on a key-like column (issue
-// key, project key) to `field = "value"` or `field in ("a", "b", ...)`.
-func translateKeyish(f source.Filter, field string) (string, bool) {
+// key, project key) to `field = "value"` or `field in ("a", "b", ...)`. Empty
+// strings are never pushed (see translateEq).
+func translateKeyish(f source.Filter, field string) (clause string, exact, ok bool) {
 	switch f.Op {
 	case sqlparse.OpEq:
-		s, ok := f.Value.(string)
-		if !ok {
-			return "", false
-		}
-		return field + " = " + quoteJQL(s), true
+		return translateEq(f, field)
 	case sqlparse.OpIn:
 		if len(f.Values) == 0 {
-			return "", false
+			return "", false, false
 		}
 		vals := make([]string, 0, len(f.Values))
 		for _, v := range f.Values {
 			s, ok := v.(string)
-			if !ok {
-				return "", false
+			if !ok || s == "" {
+				return "", false, false
 			}
 			vals = append(vals, quoteJQL(s))
 		}
-		return field + " in (" + strings.Join(vals, ", ") + ")", true
+		return field + " in (" + strings.Join(vals, ", ") + ")", true, true
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 
@@ -159,34 +166,35 @@ const tzSlack = 24 * time.Hour
 // direction (JQL literals are interpreted in the Jira user's timezone, unknown
 // to us — see tzSlack) and then rounded outward to the minute (JQL's datetime
 // granularity), so the pushed clause is always a superset of the exact
-// predicate, which SQLite re-applies locally.
-func translateRange(f source.Filter, field string) (string, bool) {
+// predicate, which SQLite re-applies locally. Because the clause is widened it
+// is never exact — a range filter always blocks LIMIT push.
+func translateRange(f source.Filter, field string) (clause string, exact, ok bool) {
 	switch f.Op {
 	case sqlparse.OpGt, sqlparse.OpGte:
 		t, ok := parseJQLTime(f.Value)
 		if !ok {
-			return "", false
+			return "", false, false
 		}
-		return field + " >= " + quoteJQLTime(floorMinute(t.Add(-tzSlack))), true
+		return field + " >= " + quoteJQLTime(floorMinute(t.Add(-tzSlack))), false, true
 	case sqlparse.OpLt, sqlparse.OpLte:
 		t, ok := parseJQLTime(f.Value)
 		if !ok {
-			return "", false
+			return "", false, false
 		}
-		return field + " <= " + quoteJQLTime(ceilMinute(t.Add(tzSlack))), true
+		return field + " <= " + quoteJQLTime(ceilMinute(t.Add(tzSlack))), false, true
 	case sqlparse.OpBetween:
 		if len(f.Values) != 2 {
-			return "", false
+			return "", false, false
 		}
 		lo, okLo := parseJQLTime(f.Values[0])
 		hi, okHi := parseJQLTime(f.Values[1])
 		if !okLo || !okHi {
-			return "", false
+			return "", false, false
 		}
 		return field + " >= " + quoteJQLTime(floorMinute(lo.Add(-tzSlack))) +
-			" AND " + field + " <= " + quoteJQLTime(ceilMinute(hi.Add(tzSlack))), true
+			" AND " + field + " <= " + quoteJQLTime(ceilMinute(hi.Add(tzSlack))), false, true
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 

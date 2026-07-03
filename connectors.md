@@ -414,13 +414,16 @@ enhanced search endpoint (`/rest/api/3/search/jql`): equality on `key`,
 day in each direction — Jira interprets JQL datetime literals in the
 authenticated user's timezone, which dfetch can't know, and the exact predicate
 is re-applied locally — then rounded outward to the minute, JQL's datetime
-granularity); and `ORDER BY` on
-`created`, `updated`, `key`, `priority`, `due_date` (→ `duedate`), `status`
-when every term maps. A `LIMIT` rides the search only when every filter
-translated into JQL and the ordering was fully honored. **Without any
+granularity); and `ORDER BY` on `created`, `updated`, `due_date` (→ `duedate`)
+when every term maps (`key`, `priority`, and `status` are not pushed: JQL sorts
+them semantically — issue keys numerically, priority/status by rank — which
+differs from SQLite's text ordering). A `LIMIT` rides the search only when
+every filter translated into JQL **exactly** and the ordering was fully
+honored — a widened range filter therefore blocks it. **Without any
 translatable restriction, the search defaults to `created >= -30d`** (JQL
 rejects an unbounded query), so a bare `SELECT * FROM jira.issues LIMIT 10`
-still runs; a pushed filter that bounds the query replaces the default.
+still runs; the default emits a warning, blocks `LIMIT` push-down, and is
+replaced by any pushed filter that bounds the query.
 `description` is rendered from Atlassian Document Format to plain text.
 
 `jira.projects` pushes `key` equality/`IN` to the `keys` query param and a
