@@ -19,6 +19,8 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
+	t.Setenv("JIRA_API_TOKEN", "test")
+	t.Setenv("JIRA_EMAIL", "test@test.com")
 	c, err := New(map[string]any{"base_url": srv.URL})
 	require.NoError(t, err)
 	return c.(*Connector)
