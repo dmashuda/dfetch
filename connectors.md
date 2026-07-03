@@ -370,3 +370,66 @@ LIMIT for complete results.
 `$DFETCH_NEWRELIC_API_KEY`). NerdGraph does not accept the ingest license key
 used for sending telemetry — create a key of type "User" under
 one.newrelic.com → API keys.
+
+## Jira — connector type `jira`
+
+A configured connector backed by the
+[Jira Cloud REST API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/)
+(no default host — every site is its own `https://<yoursite>.atlassian.net`).
+
+| table             | rows                               | required filters |
+| ----------------- | ----------------------------------- | ----------------- |
+| `jira.issues`      | issues, translated into a JQL search | —                |
+| `jira.projects`    | projects visible to the API key/user | —                |
+| `jira.comments`    | one issue's comments                 | `issue_key`       |
+
+```yaml
+sources:
+  - name: jira # queried as jira.<table>
+    type: jira
+    params:
+      base_url: https://yoursite.atlassian.net
+```
+
+```sh
+JIRA_EMAIL='me@example.com' JIRA_API_TOKEN='ATATT...' \
+  dfetch query "SELECT key, summary, status, assignee_display_name
+                FROM jira.issues
+                WHERE project_key = 'PROJ' AND status = 'In Progress'
+                ORDER BY updated DESC LIMIT 20"
+
+dfetch query "SELECT key, name, project_type_key FROM jira.projects ORDER BY key"
+
+dfetch query "SELECT author_display_name, created, body
+              FROM jira.comments
+              WHERE issue_key = 'PROJ-123'
+              ORDER BY created DESC"
+```
+
+`jira.issues` translates the query's `WHERE`/`ORDER BY` into JQL for the
+enhanced search endpoint (`/rest/api/3/search/jql`): equality on `key`,
+`project_key` (→ `project`), `issue_type`, `status`, `priority`, `resolution`,
+`assignee_account_id` (→ `assignee`), `reporter_account_id` (→ `reporter`);
+`IN` on `key`/`project_key`; range filters on `created`/`updated` (rounded
+outward to the minute — JQL's datetime granularity); and `ORDER BY` on
+`created`, `updated`, `key`, `priority`, `due_date` (→ `duedate`), `status`
+when every term maps. A `LIMIT` rides the search only when every filter
+translated into JQL and the ordering was fully honored. **Without any
+translatable restriction, the search defaults to `created >= -30d`** (JQL
+rejects an unbounded query), so a bare `SELECT * FROM jira.issues LIMIT 10`
+still runs; a pushed filter that bounds the query replaces the default.
+`description` is rendered from Atlassian Document Format to plain text.
+
+`jira.projects` pushes `key` equality/`IN` to the `keys` query param and a
+single-column `ORDER BY` (`key` or `name`) to `orderBy`. `jira.comments`
+requires `issue_key = '...'` (or `issue_key IN (...)`, one request per key) and
+pushes a single-column `ORDER BY created`; `body` is also rendered from ADF to
+plain text.
+
+**Authentication:** HTTP Basic with `$JIRA_EMAIL` + `$JIRA_API_TOKEN` (create a
+token at
+[id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)),
+or configure `params.auth_header_command` — an argv whose stdout is used
+**verbatim** as the Authorization header. With neither configured, requests go
+out unauthenticated (some sites allow anonymous read access); a `401` response
+is reported with a hint to set the env vars.

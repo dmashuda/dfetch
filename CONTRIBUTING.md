@@ -107,6 +107,7 @@ internal/source/docker  Docker connector (containers, images, volumes, networks)
 internal/source/slack   Slack connector (channels, users, messages, search), Web API
 internal/source/newrelic New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
 internal/source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
+internal/source/jira    Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only via `type: jira`
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve

@@ -31,6 +31,17 @@
 # API key (NOT the ingest license key) in $NEW_RELIC_API_KEY. Query NRDB event
 # types (newrelic.Transaction, newrelic.Span, ...) and the curated tables
 # (accounts, entities, alert_policies, alert_conditions, issues, incidents):
+#
+# Jira Cloud is config-only too: it needs your site's base_url (there is no
+# default host). Authenticate with $JIRA_EMAIL + $JIRA_API_TOKEN (create one at
+# https://id.atlassian.com/manage-profile/security/api-tokens), or
+# auth_header_command for the full Authorization header:
+# sources:
+#   - name: jira
+#     type: jira
+#     params:
+#       base_url: https://yoursite.atlassian.net
+#
 sources:
   - name: newrelic
     type: newrelic
