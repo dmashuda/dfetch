@@ -23,6 +23,7 @@ internal/source/docker  Docker connector (containers/images/volumes/networks), E
 internal/source/slack   Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_command (full Cookie header, verbatim)
 internal/source/newrelic New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
 internal/source/postgres Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
+internal/source/jira    Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_command (full header, verbatim)
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
 internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
 internal/engine         orchestration: parse -> plan push-down -> load -> resolve

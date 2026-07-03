@@ -68,8 +68,8 @@ to `~/dfetch.yaml` (see [Configuration](#configuration)).
 
 ## Connectors
 
-dfetch ships with seven connectors — five built in (no configuration) plus
-configured PostgreSQL and New Relic `type`s:
+dfetch ships with eight connectors — five built in (no configuration) plus
+configured PostgreSQL, New Relic, and Jira `type`s:
 
 | schema     | source                              | tables                                                                        |
 | ---------- | ----------------------------------- | ----------------------------------------------------------------------------- |
@@ -80,6 +80,7 @@ configured PostgreSQL and New Relic `type`s:
 | `slack`    | Slack Web API                       | channels, users, messages, search                                             |
 | `postgres` | PostgreSQL (config `type`)          | any table (dynamic discovery)                                                 |
 | `newrelic` | New Relic NerdGraph (config `type`) | any NRDB event type (dynamic) + accounts, entities, alerts, issues, incidents |
+| `jira`     | Jira Cloud REST API (config `type`) | issues, projects, comments                                                    |
 
 See **[connectors.md](connectors.md)** for each connector's connection details,
 required filters, columns, push-down behavior, and runnable query examples.
