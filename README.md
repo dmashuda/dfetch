@@ -68,17 +68,18 @@ to `~/dfetch.yaml` (see [Configuration](#configuration)).
 
 ## Connectors
 
-dfetch ships with six connectors — five built in (no configuration) plus a
-configured PostgreSQL `type`:
+dfetch ships with seven connectors — five built in (no configuration) plus
+configured PostgreSQL and New Relic `type`s:
 
-| schema     | source                     | tables                                                            |
-| ---------- | -------------------------- | ----------------------------------------------------------------- |
-| `github`   | GitHub REST API            | issues, pulls, repos, commits, releases, workflow_runs, artifacts |
-| `jaeger`   | Jaeger api_v3              | spans, services, operations                                       |
-| `datagov`  | data.gov / CKAN            | datasets, resources, organizations, groups                        |
-| `docker`   | Docker Engine API          | containers, images, volumes, networks                             |
-| `slack`    | Slack Web API              | channels, users, messages, search                                 |
-| `postgres` | PostgreSQL (config `type`) | any table (dynamic discovery)                                     |
+| schema     | source                              | tables                                                                        |
+| ---------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| `github`   | GitHub REST API                     | issues, pulls, repos, commits, releases, workflow_runs, artifacts             |
+| `jaeger`   | Jaeger api_v3                       | spans, services, operations                                                   |
+| `datagov`  | data.gov / CKAN                     | datasets, resources, organizations, groups                                    |
+| `docker`   | Docker Engine API                   | containers, images, volumes, networks                                         |
+| `slack`    | Slack Web API                       | channels, users, messages, search                                             |
+| `postgres` | PostgreSQL (config `type`)          | any table (dynamic discovery)                                                 |
+| `newrelic` | New Relic NerdGraph (config `type`) | any NRDB event type (dynamic) + accounts, entities, alerts, issues, incidents |
 
 See **[connectors.md](connectors.md)** for each connector's connection details,
 required filters, columns, push-down behavior, and runnable query examples.

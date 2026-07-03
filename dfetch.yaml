@@ -27,6 +27,20 @@
 #     params:
 #       auth_header_command: ["cat", "/run/secrets/slack-auth-header"]
 #
+# New Relic (NerdGraph) is config-only: it needs your account id, plus a User
+# API key (NOT the ingest license key) in $NEW_RELIC_API_KEY. Query NRDB event
+# types (newrelic.Transaction, newrelic.Span, ...) and the curated tables
+# (accounts, entities, alert_policies, alert_conditions, issues, incidents):
+sources:
+  - name: newrelic
+    type: newrelic
+    params:
+      account_id: 8239950
+  - name: github
+    type: github
+    params:
+      token_command: ["gh", "auth", "token"]
+#
 
 queries:
   # Latest error spans for a service (defaults to a 1-hour window in Jaeger).
@@ -99,3 +113,66 @@ queries:
       WHERE owner = 'dmashuda' AND repo = 'dfetch'
       ORDER BY created_at DESC
       LIMIT 50
+
+  # Latest spans for a service in New Relic (defaults to the last hour; add a
+  # timestamp >= <epoch_ms> filter for more history). SELECT * so --all-columns
+  # exposes every span attribute. e.g. dfetch run nr-recent-spans dfetch
+  - name: nr-recent-spans
+    description: Latest New Relic spans for a service
+    params: [service]
+    columns: [timestamp, name, duration.ms, trace.id]
+    sql: |
+      SELECT *
+      FROM newrelic.Span
+      WHERE `service.name` = :service
+      ORDER BY timestamp DESC
+      LIMIT 50
+
+  # Slowest spans for a service, sorted locally (duration ordering can't ride
+  # the NRQL push-down; the fetch is capped at 5000 events in the window).
+  # e.g. dfetch run nr-slow-spans dfetch
+  - name: nr-slow-spans
+    description: Slowest New Relic spans for a service
+    params: [service]
+    columns: [timestamp, name, duration.ms, trace.id]
+    sql: |
+      SELECT *
+      FROM newrelic.Span
+      WHERE `service.name` = :service
+      ORDER BY `duration.ms` DESC
+      LIMIT 25
+
+  # Every New Relic span in a trace, in start order — the NR twin of
+  # trace-spans. e.g. dfetch run nr-trace 845219c3627de5fa...
+  - name: nr-trace
+    description: All New Relic spans for a trace
+    params: [trace_id]
+    columns: [timestamp, name, duration.ms, service.name]
+    sql: |
+      SELECT *
+      FROM newrelic.Span
+      WHERE `trace.id` = :trace_id
+      ORDER BY timestamp
+
+  # Alert issues that aren't closed (what's firing right now).
+  # e.g. dfetch run nr-open-issues
+  - name: nr-open-issues
+    description: Open New Relic alert issues
+    params: []
+    columns: [title, priority, state, entity_names]
+    sql: |
+      SELECT title, priority, state, created_at, entity_names, entity_types
+      FROM newrelic.issues
+      WHERE state != 'CLOSED'
+      ORDER BY created_at DESC
+
+  # Everything New Relic monitors in the account, by name.
+  # e.g. dfetch run nr-entities
+  - name: nr-entities
+    description: New Relic entity inventory
+    params: []
+    columns: [name, domain, type, alert_severity]
+    sql: |
+      SELECT name, domain, type, entity_type, alert_severity, reporting, guid
+      FROM newrelic.entities
+      ORDER BY name
