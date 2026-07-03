@@ -157,15 +157,17 @@ To additionally ship traces to an external backend (e.g. New Relic), copy
 (gitignored) — it layers `otel-collector.newrelic.yaml` onto the collector,
 keyed by `$NEW_RELIC_LICENSE_KEY`. The default stack stays local-only.
 
-Each query is one trace:
+Each CLI invocation is one trace, rooted in a `cli.<command>` span (so
+`dfetch tables`, `dfetch run`, … are traced too, not just `query`):
 
 ```
-engine.Run (db.query.text=<sql>)
-├─ engine.parse               → what the parser understood (tables, joins, limit, …)
-├─ engine.loadSource (github.issues)
-│  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
-│  └─ ATTACH / CREATE / INSERT (otelsql)
-└─ SELECT                      (the local resolve; otelsql)
+cli.query (cli.args=[query SELECT …])
+└─ engine.Run (db.query.text=<sql>)
+   ├─ engine.parse               → what the parser understood (tables, joins, limit, …)
+   ├─ engine.loadSource (github.issues)
+   │  ├─ connector.scan          → one HTTP GET span per API page (otelhttp)
+   │  └─ ATTACH / CREATE / INSERT (otelsql)
+   └─ SELECT                      (the local resolve; otelsql)
 ```
 
 Use it to see how many API calls a query made (pagination shows as multiple `GET`

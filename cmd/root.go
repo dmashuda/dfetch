@@ -6,8 +6,13 @@ package cmd
 
 import (
 	"context"
+	"os"
 
+	"github.com/dmashuda/dfetch/internal/telemetry"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -30,10 +35,41 @@ func SetVersion(v string) {
 	rootCmd.Version = v
 }
 
-// Execute runs the root command. Cancelling ctx (e.g. on Ctrl-C) propagates to
-// every subcommand's cmd.Context(), aborting in-flight connector scans.
+// Execute runs the root command inside a root `cli.<command>` span, so every
+// subcommand — not just query, whose engine.Run starts its own child span —
+// produces one trace per invocation; engine, connector, and SQLite spans nest
+// under it via cmd.Context(). The span is against the no-op tracer unless an
+// OTLP endpoint is configured (see internal/telemetry), so untraced runs pay
+// nothing. Cancelling ctx (e.g. on Ctrl-C) propagates to every subcommand's
+// cmd.Context(), aborting in-flight connector scans.
 func Execute(ctx context.Context) error {
-	return rootCmd.ExecuteContext(ctx)
+	args := os.Args[1:]
+	ctx, span := telemetry.Tracer().Start(ctx, commandSpanName(args),
+		trace.WithAttributes(attribute.StringSlice("cli.args", args)))
+	defer span.End()
+
+	err := rootCmd.ExecuteContext(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+// commandSpanName names the root span after the subcommand cobra will invoke
+// ("cli.tables", "cli.query", …). It resolves the raw args the same way
+// ExecuteContext is about to (cobra's Find skips flags), falling back to
+// "cli.dfetch" for the bare root command, --help/--version, or an unknown
+// command.
+func commandSpanName(args []string) string {
+	// cobra only registers the help subcommand inside Execute; init it here so
+	// `dfetch help <cmd>` resolves instead of falling back.
+	rootCmd.InitDefaultHelpCmd()
+	c, _, err := rootCmd.Find(args)
+	if err != nil || c == nil || c == rootCmd {
+		return "cli.dfetch"
+	}
+	return "cli." + c.Name()
 }
 
 func init() {
