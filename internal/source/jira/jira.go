@@ -7,11 +7,10 @@
 // there is no default host, every site is its own
 // https://<yoursite>.atlassian.net.
 //
-// Auth is a single Authorization header: either $JIRA_EMAIL + $JIRA_API_TOKEN
-// (sent as HTTP Basic) or params.auth_header_command, whose output is used
-// verbatim. With neither configured, requests go out with no Authorization
-// header (some Jira sites allow anonymous read access); a 401 response is
-// reported with a hint to set the env vars.
+// Auth is required, as a single Authorization header: either $JIRA_EMAIL +
+// $JIRA_API_TOKEN (sent as HTTP Basic) or params.auth_header_command, whose
+// output is used verbatim. With neither configured, requests fail with a
+// message naming both options; a 401 response is reported with the same hint.
 package jira
 
 import (
@@ -237,7 +236,7 @@ func (c *Connector) doJSON(ctx context.Context, method, rawurl string, body []by
 		return err
 	}
 	if authHeader == "" {
-		return fmt.Errorf("jira: auth header is empty")
+		return errors.New("jira: no credentials configured; set $JIRA_EMAIL + $JIRA_API_TOKEN or params.auth_header_command")
 	}
 	req.Header.Set("Authorization", authHeader)
 
