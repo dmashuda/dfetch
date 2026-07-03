@@ -283,6 +283,15 @@ func (c *Connector) scanConditions(ctx context.Context, req source.ScanRequest, 
 			vars["criteria"] = criteria
 		}
 		if err := c.gqlPost(ctx, conditionsGQL, vars, &out); err != nil {
+			// NerdGraph reports a searchCriteria policyId that doesn't exist as
+			// an error ("Policy with ID <id> not found"), but under SQL semantics
+			// `WHERE policy_id = '<id>'` on a missing policy is an empty result,
+			// not a failure. Match that exact error narrowly (verified live);
+			// anything else stays fatal.
+			if id, ok := criteria["policyId"].(string); ok &&
+				strings.Contains(err.Error(), fmt.Sprintf("Policy with ID %s not found", id)) {
+				return nil, "", nil
+			}
 			return nil, "", err
 		}
 		res := out.Actor.Account.Alerts.NrqlConditionsSearch

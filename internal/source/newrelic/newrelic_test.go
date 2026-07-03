@@ -432,6 +432,34 @@ func TestScanConditionsPushesPolicyID(t *testing.T) {
 	assert.Equal(t, "123", criteria["policyId"])
 }
 
+// A searchCriteria policyId that doesn't exist comes back as a GraphQL error,
+// but under SQL semantics `WHERE policy_id = ...` on a missing policy is an
+// empty result, not a failure (error text verified against the live API).
+func TestScanConditionsMissingPolicyIsEmpty(t *testing.T) {
+	_, h := capture(t, func(w http.ResponseWriter, call gqlCall) {
+		_, _ = fmt.Fprint(w, `{"errors":[{"message":"Policy with ID 42 not found"}]}`)
+	})
+	c := newTestConnector(t, nil, h)
+
+	rows, err := collectScan(c, source.ScanRequest{
+		Table:   "alert_conditions",
+		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: "42"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rows.Rows)
+
+	// Any other GraphQL error stays fatal.
+	_, h2 := capture(t, func(w http.ResponseWriter, call gqlCall) {
+		_, _ = fmt.Fprint(w, `{"errors":[{"message":"internal server error"}]}`)
+	})
+	c2 := newTestConnector(t, nil, h2)
+	_, err = collectScan(c2, source.ScanRequest{
+		Table:   "alert_conditions",
+		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: "42"}},
+	})
+	require.Error(t, err)
+}
+
 func TestScanPolicies(t *testing.T) {
 	_, h := capture(t, func(w http.ResponseWriter, call gqlCall) {
 		_, _ = fmt.Fprint(w, `{"data":{"actor":{"account":{"alerts":{"policiesSearch":{
