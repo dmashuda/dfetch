@@ -13,6 +13,9 @@ import (
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
@@ -419,6 +422,58 @@ func TestScanIssuesDefaultBoundWarnsAndBlocksLimit(t *testing.T) {
 	assert.EqualValues(t, defaultPageSize, gotBody["maxResults"]) // LIMIT not pushed
 	require.NotEmpty(t, res.Warnings)
 	assert.Contains(t, res.Warnings[0], defaultBoundClause)
+}
+
+// Auth is required: with no credentials configured a scan fails with a message
+// naming both options, and no request goes out.
+func TestScanWithoutCredentialsErrors(t *testing.T) {
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	t.Cleanup(srv.Close)
+	c, err := New(map[string]any{"base_url": srv.URL})
+	require.NoError(t, err)
+
+	_, err = collectScan(c, source.ScanRequest{Table: "projects"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JIRA_EMAIL")
+	assert.Contains(t, err.Error(), "auth_header_command")
+	assert.False(t, called, "no request should be sent without credentials")
+}
+
+// The generated JQL is recorded on a jira.jql span (db.query.text) — it rides
+// in the POST body, invisible to the generic otelhttp span, so without this
+// traces can't show what was pushed down (mirrors newrelic.nrql).
+func TestScanIssuesRecordsJQLSpan(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)))
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	c := newTestConnector(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(issuesPage2))
+	})
+	_, err := collectScan(c, source.ScanRequest{
+		Table:   "issues",
+		Filters: []source.Filter{eqFilter("project_key", "PROJ")},
+	})
+	require.NoError(t, err)
+
+	jqlSpans := make([]sdktrace.ReadOnlySpan, 0, 1)
+	for _, s := range sr.Ended() {
+		if s.Name() == "jira.jql" {
+			jqlSpans = append(jqlSpans, s)
+		}
+	}
+	require.Len(t, jqlSpans, 1) // one page -> one span
+	var got string
+	for _, kv := range jqlSpans[0].Attributes() {
+		if kv.Key == "db.query.text" {
+			got = kv.Value.AsString()
+		}
+	}
+	assert.Equal(t, `project = "PROJ"`, got)
 }
 
 func TestScanIssuesInvalidIDErrors(t *testing.T) {

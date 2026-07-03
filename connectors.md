@@ -432,10 +432,10 @@ requires `issue_key = '...'` (or `issue_key IN (...)`, one request per key) and
 pushes a single-column `ORDER BY created`; `body` is also rendered from ADF to
 plain text.
 
-**Authentication:** HTTP Basic with `$JIRA_EMAIL` + `$JIRA_API_TOKEN` (create a
-token at
+**Authentication (required):** HTTP Basic with `$JIRA_EMAIL` + `$JIRA_API_TOKEN`
+(create a token at
 [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)),
 or configure `params.auth_header_command` — an argv whose stdout is used
-**verbatim** as the Authorization header. With neither configured, requests go
-out unauthenticated (some sites allow anonymous read access); a `401` response
-is reported with a hint to set the env vars.
+**verbatim** as the Authorization header. With neither configured, a jira query
+fails with a message naming both options; a `401` response is reported with the
+same hint.
