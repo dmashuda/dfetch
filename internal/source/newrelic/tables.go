@@ -246,12 +246,17 @@ const conditionsGQL = `query($account: Int!, $cursor: String, $criteria: AlertsN
 
 func (c *Connector) scanConditions(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	// policy_id equality is an exact ID match on the search criteria, so it is
-	// consumed and a LIMIT may ride it.
+	// consumed and a LIMIT may ride it — but only when it actually became
+	// criteria: stringEq rejects a non-string value (policy_id = 123), and an
+	// unsent filter must not count as consumed or the early stop would truncate
+	// the unfiltered list before SQLite re-filters it.
 	var criteria map[string]any
+	consumed := []string{}
 	if id, ok := stringEq(req, "policy_id"); ok {
 		criteria = map[string]any{"policyId": id}
+		consumed = append(consumed, "policy_id")
 	}
-	stopAt, pushLimit := pageLimit(req, limitSafe(req, "policy_id"))
+	stopAt, pushLimit := pageLimit(req, limitSafe(req, consumed...))
 
 	fetch := func(ctx context.Context, cursor string) ([][]any, string, error) {
 		var out struct {

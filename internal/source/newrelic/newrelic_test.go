@@ -450,6 +450,36 @@ func TestScanConditionsPushesPolicyID(t *testing.T) {
 	assert.Equal(t, "123", criteria["policyId"])
 }
 
+// A non-string policy_id equality (policy_id = 123) can't become search
+// criteria, so it is not consumed: the LIMIT must not stop pagination early
+// over the unfiltered list (SQLite re-filters, so truncation would drop rows).
+func TestScanConditionsNonStringPolicyIDBlocksEarlyStop(t *testing.T) {
+	pages := 0
+	calls, h := capture(t, func(w http.ResponseWriter, call gqlCall) {
+		pages++
+		next := "null"
+		if pages < 3 {
+			next = fmt.Sprintf("%q", fmt.Sprintf("c%d", pages))
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"actor":{"account":{"alerts":{"nrqlConditionsSearch":{
+			"nrqlConditions":[{"id":"%d","name":"c","policyId":"999","enabled":true,"type":"STATIC"}],
+			"nextCursor":%s}}}}}}`, pages, next)
+	})
+	c := newTestConnector(t, nil, h)
+
+	limit := 1
+	rows, err := collectScan(c, source.ScanRequest{
+		Table:   "alert_conditions",
+		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: int64(123)}},
+		Limit:   &limit,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, pages)   // did NOT stop at the limit
+	assert.Len(t, rows.Rows, 3) // superset delivered; SQLite trims
+	_, hasCriteria := (*calls)[0].Variables["criteria"]
+	assert.False(t, hasCriteria) // the int filter never became criteria
+}
+
 // A searchCriteria policyId that doesn't exist comes back as a GraphQL error,
 // but under SQL semantics `WHERE policy_id = ...` on a missing policy is an
 // empty result, not a failure (error text verified against the live API).
