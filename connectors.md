@@ -410,8 +410,11 @@ dfetch query "SELECT author_display_name, created, body
 enhanced search endpoint (`/rest/api/3/search/jql`): equality on `key`,
 `project_key` (→ `project`), `issue_type`, `status`, `priority`, `resolution`,
 `assignee_account_id` (→ `assignee`), `reporter_account_id` (→ `reporter`);
-`IN` on `key`/`project_key`; range filters on `created`/`updated` (rounded
-outward to the minute — JQL's datetime granularity); and `ORDER BY` on
+`IN` on `key`/`project_key`; range filters on `created`/`updated` (widened by a
+day in each direction — Jira interprets JQL datetime literals in the
+authenticated user's timezone, which dfetch can't know, and the exact predicate
+is re-applied locally — then rounded outward to the minute, JQL's datetime
+granularity); and `ORDER BY` on
 `created`, `updated`, `key`, `priority`, `due_date` (→ `duedate`), `status`
 when every term maps. A `LIMIT` rides the search only when every filter
 translated into JQL and the ordering was fully honored. **Without any

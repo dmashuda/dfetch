@@ -143,11 +143,23 @@ func translateKeyish(f source.Filter, field string) (string, bool) {
 	}
 }
 
+// tzSlack widens each pushed datetime bound so it stays a superset regardless
+// of the Jira-side timezone. Jira interprets a JQL datetime literal in the
+// authenticated user's configured Jira timezone, which the connector cannot
+// know; user tz offsets span -12:00 to +14:00, so a UTC wall-clock literal can
+// denote an absolute instant up to 14h away from the intended one — enough for
+// a lower bound to exclude rows the query wants (which SQLite's local
+// re-filter could never restore). A day of slack in each direction covers the
+// full offset range; the exact predicate is re-applied locally, so the only
+// cost is fetching up to a day of extra rows on each side.
+const tzSlack = 24 * time.Hour
+
 // translateRange translates a range filter (Gt/Gte/Lt/Lte/Between) on a
-// created/updated column to a JQL bound. JQL datetime granularity is minutes,
-// so lower bounds are truncated down and upper bounds rounded up to the
-// minute — the pushed clause is always a superset of the exact predicate,
-// which SQLite re-applies locally.
+// created/updated column to a JQL bound. Bounds are widened by tzSlack in each
+// direction (JQL literals are interpreted in the Jira user's timezone, unknown
+// to us — see tzSlack) and then rounded outward to the minute (JQL's datetime
+// granularity), so the pushed clause is always a superset of the exact
+// predicate, which SQLite re-applies locally.
 func translateRange(f source.Filter, field string) (string, bool) {
 	switch f.Op {
 	case sqlparse.OpGt, sqlparse.OpGte:
@@ -155,13 +167,13 @@ func translateRange(f source.Filter, field string) (string, bool) {
 		if !ok {
 			return "", false
 		}
-		return field + " >= " + quoteJQLTime(floorMinute(t)), true
+		return field + " >= " + quoteJQLTime(floorMinute(t.Add(-tzSlack))), true
 	case sqlparse.OpLt, sqlparse.OpLte:
 		t, ok := parseJQLTime(f.Value)
 		if !ok {
 			return "", false
 		}
-		return field + " <= " + quoteJQLTime(ceilMinute(t)), true
+		return field + " <= " + quoteJQLTime(ceilMinute(t.Add(tzSlack))), true
 	case sqlparse.OpBetween:
 		if len(f.Values) != 2 {
 			return "", false
@@ -171,8 +183,8 @@ func translateRange(f source.Filter, field string) (string, bool) {
 		if !okLo || !okHi {
 			return "", false
 		}
-		return field + " >= " + quoteJQLTime(floorMinute(lo)) +
-			" AND " + field + " <= " + quoteJQLTime(ceilMinute(hi)), true
+		return field + " >= " + quoteJQLTime(floorMinute(lo.Add(-tzSlack))) +
+			" AND " + field + " <= " + quoteJQLTime(ceilMinute(hi.Add(tzSlack))), true
 	default:
 		return "", false
 	}
@@ -213,6 +225,9 @@ func ceilMinute(t time.Time) time.Time {
 	return floored.Add(time.Minute)
 }
 
+// quoteJQLTime renders t as a quoted JQL datetime literal using its UTC wall
+// clock. Jira will interpret the literal in the Jira user's timezone (not
+// UTC), which is why callers widen bounds by tzSlack before formatting.
 func quoteJQLTime(t time.Time) string { return `"` + t.UTC().Format(jqlTimeLayout) + `"` }
 
 // jqlOrderBy maps every ORDER BY term to a JQL ORDER BY field; ok is false

@@ -58,6 +58,10 @@ func TestBuildJQLBoundednessDefault(t *testing.T) {
 	assert.True(t, plan.ConsumedAll) // no filters at all: vacuously consumed
 }
 
+// Pushed date bounds are widened by a day in each direction (JQL datetime
+// literals are interpreted in the Jira user's timezone, unknown to the
+// connector; see tzSlack), then rounded outward to the minute (JQL's
+// granularity). Lower bounds land a day earlier, upper bounds a day later.
 func TestBuildJQLDateRangeRounding(t *testing.T) {
 	cases := map[string]struct {
 		op     sqlparse.Operator
@@ -65,12 +69,12 @@ func TestBuildJQLDateRangeRounding(t *testing.T) {
 		values []any
 		want   string
 	}{
-		"gte exact minute":  {op: sqlparse.OpGte, value: "2024-01-01T10:00:00Z", want: `created >= "2024-01-01 10:00"`},
-		"gt truncates down": {op: sqlparse.OpGt, value: "2024-01-01T10:00:30Z", want: `created >= "2024-01-01 10:00"`},
-		"lte exact minute":  {op: sqlparse.OpLte, value: "2024-01-01T10:00:00Z", want: `created <= "2024-01-01 10:00"`},
-		"lt rounds up":      {op: sqlparse.OpLt, value: "2024-01-01T10:00:30Z", want: `created <= "2024-01-01 10:01"`},
-		"date-only lower":   {op: sqlparse.OpGte, value: "2024-01-01", want: `created >= "2024-01-01 00:00"`},
-		"space form lower":  {op: sqlparse.OpGte, value: "2024-01-01 10:00", want: `created >= "2024-01-01 10:00"`},
+		"gte exact minute":  {op: sqlparse.OpGte, value: "2024-01-01T10:00:00Z", want: `created >= "2023-12-31 10:00"`},
+		"gt truncates down": {op: sqlparse.OpGt, value: "2024-01-01T10:00:30Z", want: `created >= "2023-12-31 10:00"`},
+		"lte exact minute":  {op: sqlparse.OpLte, value: "2024-01-01T10:00:00Z", want: `created <= "2024-01-02 10:00"`},
+		"lt rounds up":      {op: sqlparse.OpLt, value: "2024-01-01T10:00:30Z", want: `created <= "2024-01-02 10:01"`},
+		"date-only lower":   {op: sqlparse.OpGte, value: "2024-01-01", want: `created >= "2023-12-31 00:00"`},
+		"space form lower":  {op: sqlparse.OpGte, value: "2024-01-01 10:00", want: `created >= "2023-12-31 10:00"`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -82,11 +86,12 @@ func TestBuildJQLDateRangeRounding(t *testing.T) {
 		})
 	}
 
-	// BETWEEN: low truncated down, high rounded up, both bounds present.
+	// BETWEEN: low widened a day earlier and truncated down, high widened a day
+	// later and rounded up, both bounds present.
 	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{
 		{Column: "updated", Op: sqlparse.OpBetween, Values: []any{"2024-01-01T10:00:30Z", "2024-01-02T10:00:30Z"}},
 	}})
-	assert.Equal(t, `updated >= "2024-01-01 10:00" AND updated <= "2024-01-02 10:01"`, plan.JQL)
+	assert.Equal(t, `updated >= "2023-12-31 10:00" AND updated <= "2024-01-03 10:01"`, plan.JQL)
 	assert.True(t, plan.ConsumedAll)
 }
 
@@ -97,7 +102,7 @@ func TestBuildJQLBothBoundsFromSeparateFilters(t *testing.T) {
 		{Column: "created", Op: sqlparse.OpGte, Value: "2024-01-01T00:00:00Z"},
 		{Column: "created", Op: sqlparse.OpLte, Value: "2024-01-31T00:00:00Z"},
 	}})
-	assert.Equal(t, `created >= "2024-01-01 00:00" AND created <= "2024-01-31 00:00"`, plan.JQL)
+	assert.Equal(t, `created >= "2023-12-31 00:00" AND created <= "2024-02-01 00:00"`, plan.JQL)
 	assert.True(t, plan.ConsumedAll)
 }
 
