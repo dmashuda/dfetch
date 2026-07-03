@@ -105,6 +105,7 @@ internal/source/jaeger  Jaeger connector (spans, services, operations)
 internal/source/ckan    CKAN/data.gov connector (datasets, resources, organizations, groups)
 internal/source/docker  Docker connector (containers, images, volumes, networks), local unix socket
 internal/source/slack   Slack connector (channels, users, messages, search), Web API
+internal/source/newrelic New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
 internal/source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
 internal/localdb        per-request local SQLite database (attach/create/insert/query)

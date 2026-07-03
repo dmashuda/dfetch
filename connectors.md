@@ -318,3 +318,55 @@ numeric/temporal (so Postgres and SQLite order identically). `LIKE` and other
 predicates are evaluated locally by SQLite. A scan whose `LIMIT` can't be pushed is
 capped at `max_rows`. Column types map to SQLite affinities (`numeric` → `REAL`,
 which can lose precision on very large exact values).
+
+## New Relic — connector type `newrelic`
+
+A configured connector backed by [NerdGraph](https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/),
+New Relic's GraphQL API (no default — it needs an account id). It is a dynamic
+source: **NRDB event types** (`Transaction`, `Span`, `Log`, custom types) are
+discovered on demand and scanned by translating your query into NRQL, alongside
+six curated tables served from NerdGraph object queries:
+
+| table                       | rows                                          | required filters |
+| --------------------------- | --------------------------------------------- | ---------------- |
+| `newrelic.<EventType>`      | NRDB events (dynamic; see `dfetch tables`)    | —                |
+| `newrelic.accounts`         | accounts visible to the API key               | —                |
+| `newrelic.entities`         | monitored entities (APM, hosts, monitors, …)  | —                |
+| `newrelic.alert_policies`   | alert policies in the account                 | —                |
+| `newrelic.alert_conditions` | NRQL alert conditions                         | —                |
+| `newrelic.issues`           | AI issues (what's alerting)                   | —                |
+| `newrelic.incidents`        | incidents underlying the issues               | —                |
+
+```yaml
+sources:
+  - name: newrelic            # queried as newrelic.<table>
+    type: newrelic
+    params:
+      account_id: 1234567     # required: your New Relic account id
+      # region: EU            # api.eu.newrelic.com for EU-datacenter accounts
+      # max_rows: 5000        # cap on an event scan whose LIMIT can't be pushed
+      # nrql_timeout: 70      # NRQL timeout in seconds
+```
+
+```sh
+NEW_RELIC_API_KEY='NRAK-…' \
+  dfetch query "SELECT timestamp, appName, duration FROM newrelic.Transaction
+                WHERE appName = 'billing' AND timestamp >= 1750000000000
+                ORDER BY timestamp DESC LIMIT 20"
+```
+
+Event columns come from NRQL's `keyset()` and mirror the attribute names
+(`host.name`, `db.query.text`, …); `timestamp` is epoch **milliseconds**
+(INTEGER), so numeric comparisons and `ORDER BY timestamp` behave exactly like
+the NR UI. Push-down: equality / `!=` / `IN` (and numeric ranges) become NRQL
+`WHERE` clauses; `timestamp` ranges also set the `SINCE`/`UNTIL` window; `ORDER
+BY timestamp` + `LIMIT` ride the query when every filter was pushed. `LIKE` is
+evaluated locally (NRQL's is case-insensitive). Without a `timestamp` lower
+bound only the **last hour** is searched (with a warning), and no event scan
+returns more than **5000 rows** (NRQL's hard cap) — narrow the window or push a
+LIMIT for complete results.
+
+**Authentication:** a **User API key** in `$NEW_RELIC_API_KEY` (or
+`$DFETCH_NEWRELIC_API_KEY`). NerdGraph does not accept the ingest license key
+used for sending telemetry — create a key of type "User" under
+one.newrelic.com → API keys.

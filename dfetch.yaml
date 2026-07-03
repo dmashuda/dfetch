@@ -27,6 +27,16 @@
 #     params:
 #       auth_header_command: ["cat", "/run/secrets/slack-auth-header"]
 #
+# New Relic (NerdGraph) is config-only: it needs your account id, plus a User
+# API key (NOT the ingest license key) in $NEW_RELIC_API_KEY. Query NRDB event
+# types (newrelic.Transaction, newrelic.Span, ...) and the curated tables
+# (accounts, entities, alert_policies, alert_conditions, issues, incidents):
+# sources:
+#   - name: newrelic
+#     type: newrelic
+#     params:
+#       account_id: 1234567
+#
 
 queries:
   # Latest error spans for a service (defaults to a 1-hour window in Jaeger).

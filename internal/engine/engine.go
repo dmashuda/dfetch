@@ -19,6 +19,7 @@ import (
 	"github.com/dmashuda/dfetch/internal/source/docker"
 	"github.com/dmashuda/dfetch/internal/source/github"
 	"github.com/dmashuda/dfetch/internal/source/jaeger"
+	"github.com/dmashuda/dfetch/internal/source/newrelic"
 	"github.com/dmashuda/dfetch/internal/source/postgres"
 	"github.com/dmashuda/dfetch/internal/source/slack"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
@@ -49,6 +50,7 @@ var builtins = map[string]source.Factory{
 // connectorTypes are registered for use via config (`type: <name>`) but are NOT
 // auto-instantiated, because they need params to construct (e.g. a Postgres DSN).
 var connectorTypes = map[string]source.Factory{
+	"newrelic": newrelic.New,
 	"postgres": postgres.New,
 }
 
