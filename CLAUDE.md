@@ -73,7 +73,9 @@ dfetch exports to the local OpenTelemetry Collector, which forwards to Jaeger
 (pipeline in `otel-collector.yaml`) — add exporters/processors there rather
 than pointing dfetch elsewhere.
 
-One query = one trace: `engine.Run → engine.loadSource → connector.scan → HTTP
+One CLI invocation = one trace, rooted in a `cli.<command>` span started by
+`cmd.Execute` (every subcommand, not just query):
+`cli.query → engine.Run → engine.loadSource → connector.scan → HTTP
 GET` (one per API page, via `otelhttp`) plus the SQLite `ATTACH/CREATE/INSERT/
 SELECT` spans (via `XSAM/otelsql`). Use it to see API-call count, where time went
 (API vs. local SQL), and which step errored. Instrumentation lives in the library
