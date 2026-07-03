@@ -10,6 +10,9 @@ import (
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
+	"github.com/dmashuda/dfetch/internal/telemetry"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func col(name, typ string) source.Column { return source.Column{Name: name, Type: typ} }
@@ -163,6 +166,12 @@ func parseID(kind, ref, id string) (int64, error) {
 
 func (c *Connector) scanIssues(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
 	plan := buildJQL(req)
+
+	ctx, span := telemetry.Tracer().Start(ctx, "jira.jql", trace.WithAttributes(
+		semconv.DBSystemNameKey.String("jira"),
+		semconv.DBQueryText(plan.JQL),
+	))
+	defer span.End()
 	// The boundedness default blocks LIMIT push too: it narrows the result to
 	// 30 days of history the query never asked for, so a pushed LIMIT would
 	// lock in the top-N of that window as if it were the top-N overall.

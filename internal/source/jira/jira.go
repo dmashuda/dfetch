@@ -236,9 +236,10 @@ func (c *Connector) doJSON(ctx context.Context, method, rawurl string, body []by
 	if err != nil {
 		return err
 	}
-	if authHeader != "" {
-		req.Header.Set("Authorization", authHeader)
+	if authHeader == "" {
+		return fmt.Errorf("jira: auth header is empty")
 	}
+	req.Header.Set("Authorization", authHeader)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

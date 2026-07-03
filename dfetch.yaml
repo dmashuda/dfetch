@@ -51,6 +51,10 @@ sources:
     type: github
     params:
       token_command: ["gh", "auth", "token"]
+  - name: jira
+    type: jira
+    params:
+      base_url: https://danmashuda.atlassian.net
 #
 
 queries:
