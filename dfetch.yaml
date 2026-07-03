@@ -31,11 +31,15 @@
 # API key (NOT the ingest license key) in $NEW_RELIC_API_KEY. Query NRDB event
 # types (newrelic.Transaction, newrelic.Span, ...) and the curated tables
 # (accounts, entities, alert_policies, alert_conditions, issues, incidents):
-# sources:
-#   - name: newrelic
-#     type: newrelic
-#     params:
-#       account_id: 1234567
+sources:
+  - name: newrelic
+    type: newrelic
+    params:
+      account_id: 8239950
+  - name: github
+    type: github
+    params:
+      token_command: ["gh", "auth", "token"]
 #
 
 queries:
