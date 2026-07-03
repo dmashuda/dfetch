@@ -24,7 +24,11 @@ import (
 
 	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
+	"github.com/dmashuda/dfetch/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -156,18 +160,40 @@ type gqlResponse struct {
 // "data" object into out. Any non-empty GraphQL errors array is fatal even when
 // data is partially populated: partial data is a subset of the requested rows,
 // which the engine's local re-filter can never correct.
+//
+// Each call runs in its own span carrying the query as db.query.text: every
+// NerdGraph request is a POST to the same /graphql URL, so the otelhttp HTTP
+// span alone can't tell one request from another. NRQL calls are named
+// newrelic.nrql with the NRQL statement; object queries are newrelic.graphql
+// with the GraphQL document. (Like engine.Run's db.query.text, the query may
+// embed literals from the user's SQL — it goes wherever traces are exported.)
 func (c *Connector) gqlPost(ctx context.Context, query string, variables map[string]any, out any) error {
+	spanName, queryText := "newrelic.graphql", query
+	if nrql, ok := variables["nrql"].(string); ok {
+		spanName, queryText = "newrelic.nrql", nrql
+	}
+	ctx, span := telemetry.Tracer().Start(ctx, spanName, trace.WithAttributes(
+		semconv.DBSystemNameKey.String("newrelic"),
+		semconv.DBQueryText(queryText),
+	))
+	defer span.End()
+	fail := func(err error) error {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
 	body, err := json.Marshal(struct {
 		Query     string         `json:"query"`
 		Variables map[string]any `json:"variables,omitempty"`
 	}{query, variables})
 	if err != nil {
-		return err
+		return fail(err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("newrelic: POST %s: %w", c.baseURL, err)
+		return fail(fmt.Errorf("newrelic: POST %s: %w", c.baseURL, err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -175,32 +201,32 @@ func (c *Connector) gqlPost(ctx context.Context, query string, variables map[str
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("newrelic: POST %s: %w", c.baseURL, err)
+		return fail(fmt.Errorf("newrelic: POST %s: %w", c.baseURL, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("newrelic: POST %s: %s: %s (401/403 usually means the key is not a User API key)", c.baseURL, resp.Status, truncate(data, 200))
+		return fail(fmt.Errorf("newrelic: POST %s: %s: %s (401/403 usually means the key is not a User API key)", c.baseURL, resp.Status, truncate(data, 200)))
 	}
 
 	var env gqlResponse
 	if err := json.Unmarshal(data, &env); err != nil {
-		return fmt.Errorf("newrelic: decoding response: %w", err)
+		return fail(fmt.Errorf("newrelic: decoding response: %w", err))
 	}
 	if len(env.Errors) > 0 {
 		msgs := make([]string, len(env.Errors))
 		for i, e := range env.Errors {
 			msgs[i] = e.Message
 		}
-		return fmt.Errorf("newrelic: graphql: %s", strings.Join(msgs, "; "))
+		return fail(fmt.Errorf("newrelic: graphql: %s", strings.Join(msgs, "; ")))
 	}
 	if out != nil && env.Data != nil {
 		if err := json.Unmarshal(env.Data, out); err != nil {
-			return fmt.Errorf("newrelic: decoding data: %w", err)
+			return fail(fmt.Errorf("newrelic: decoding data: %w", err))
 		}
 	}
 	return nil
