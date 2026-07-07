@@ -14,11 +14,36 @@ import (
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
+	// Clear the ambient key so a developer's real credential never reaches the
+	// test server (env wins over func/command credential sources).
+	t.Setenv("CKAN_API_KEY", "")
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c, err := New(map[string]any{"base_url": srv.URL})
 	require.NoError(t, err)
 	return c.(*Connector)
+}
+
+// api_key_command output is sent as the api_key query parameter (the new
+// command hatch); the plain api_key param still wins over it.
+func TestAPIKeyFromCommand(t *testing.T) {
+	t.Setenv("CKAN_API_KEY", "")
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.URL.Query().Get("api_key")
+		_, _ = w.Write([]byte(`{"success":true,"result":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"base_url":        srv.URL,
+		"api_key_command": []any{"printf", "key-from-cmd"},
+	})
+	require.NoError(t, err)
+
+	err = c.Scan(context.Background(), source.ScanRequest{Table: "organizations"}, func(*source.Rows) error { return nil })
+	require.NoError(t, err)
+	assert.Equal(t, "key-from-cmd", gotKey)
 }
 
 func eqFilter(col, val string) source.Filter {

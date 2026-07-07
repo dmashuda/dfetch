@@ -177,7 +177,7 @@ func (c *Connector) scanDatasets(ctx context.Context, req source.ScanRequest, em
 		q.Set("start", strconv.Itoa(start))
 
 		var resp pkgSearchResp
-		if err := c.getJSON(ctx, c.actionURL("package_search", q), &resp); err != nil {
+		if err := c.getJSON(ctx, c.actionURL(ctx, "package_search", q), &resp); err != nil {
 			return err
 		}
 		if !resp.Success {
@@ -307,7 +307,7 @@ func (c *Connector) scanResources(ctx context.Context, req source.ScanRequest, e
 		q.Set("start", strconv.Itoa(start))
 
 		var resp pkgSearchResp
-		if err := c.getJSON(ctx, c.actionURL("package_search", q), &resp); err != nil {
+		if err := c.getJSON(ctx, c.actionURL(ctx, "package_search", q), &resp); err != nil {
 			return err
 		}
 		if !resp.Success {
@@ -387,7 +387,7 @@ func (c *Connector) scanList(ctx context.Context, action string, cols []source.C
 	q.Set("all_fields", "true")
 
 	var resp orgGroupListResp
-	if err := c.getJSON(ctx, c.actionURL(action, q), &resp); err != nil {
+	if err := c.getJSON(ctx, c.actionURL(ctx, action, q), &resp); err != nil {
 		return err
 	}
 	if !resp.Success {
