@@ -2,7 +2,7 @@
 // syntax) and reports the external tables a query references, so the engine
 // knows which data sources to fetch. It performs syntactic validation only;
 // authoritative semantic validation happens when the query runs against the
-// per-request SQLite database (see internal/localdb).
+// per-request SQLite database (see localdb).
 package sqlparse
 
 //go:generate ./scripts/gen-parser.sh

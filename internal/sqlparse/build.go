@@ -7,6 +7,7 @@ import (
 
 	"github.com/antlr4-go/antlr/v4"
 	"github.com/dmashuda/dfetch/internal/sqlparse/gen"
+	"github.com/dmashuda/dfetch/source"
 )
 
 // buildSelect translates a parsed select_stmt into dfetch's typed AST. Only the
@@ -263,22 +264,22 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 	if len(comps) == 1 {
 		switch {
 		case len(bin.AllISNULL_()) > 0:
-			return nullPredicate(comps[0], OpIsNull, raw)
+			return nullPredicate(comps[0], source.OpIsNull, raw)
 		case len(bin.AllNOTNULL_()) > 0, len(bin.AllNULL_()) > 0:
-			return nullPredicate(comps[0], OpIsNotNull, raw)
+			return nullPredicate(comps[0], source.OpIsNotNull, raw)
 		}
 		// No operator at this level: descend for the relational operators.
 		return buildPredicateFromComparison(comps[0], raw)
 	}
 
 	// Equality (=, <>).
-	if op := equalityOp(bin); op != OpNone && len(comps) == 2 {
+	if op := equalityOp(bin); op != source.OpNone && len(comps) == 2 {
 		return comparison(comps[0], comps[1], op, raw)
 	}
 
 	// Pattern match: LIKE / GLOB / REGEXP / MATCH (+ NOT). An ESCAPE clause adds
 	// a third operand; only the simple two-operand form is structured.
-	if op := patternOp(bin, not); op != OpNone {
+	if op := patternOp(bin, not); op != source.OpNone {
 		if len(comps) == 2 {
 			return comparison(comps[0], comps[1], op, raw)
 		}
@@ -304,25 +305,25 @@ func buildPredicateFromBinary(bin gen.IExpr_binaryContext, raw string) Predicate
 }
 
 // ifNot picks the negated operator when not is set.
-func ifNot(not bool, affirmative, negated Operator) Operator {
+func ifNot(not bool, affirmative, negated source.Operator) source.Operator {
 	if not {
 		return negated
 	}
 	return affirmative
 }
 
-func patternOp(bin gen.IExpr_binaryContext, not bool) Operator {
+func patternOp(bin gen.IExpr_binaryContext, not bool) source.Operator {
 	switch {
 	case len(bin.AllLIKE_()) > 0:
-		return ifNot(not, OpLike, OpNotLike)
+		return ifNot(not, source.OpLike, source.OpNotLike)
 	case len(bin.AllGLOB_()) > 0:
-		return ifNot(not, OpGlob, OpNotGlob)
+		return ifNot(not, source.OpGlob, source.OpNotGlob)
 	case len(bin.AllREGEXP_()) > 0:
-		return ifNot(not, OpRegexp, OpNotRegexp)
+		return ifNot(not, source.OpRegexp, source.OpNotRegexp)
 	case len(bin.AllMATCH_()) > 0:
-		return ifNot(not, OpMatch, OpNotMatch)
+		return ifNot(not, source.OpMatch, source.OpNotMatch)
 	}
-	return OpNone
+	return source.OpNone
 }
 
 func isPredicate(bin gen.IExpr_binaryContext, lhs, rhs antlr.Tree, not bool, raw string) Predicate {
@@ -330,12 +331,12 @@ func isPredicate(bin gen.IExpr_binaryContext, lhs, rhs antlr.Tree, not bool, raw
 	if !distinct {
 		// `x IS NULL` / `x IS NOT NULL`.
 		if r := classify(rhs); r.isVal && r.val.Literal.IsNull() {
-			return nullPredicate(lhs, ifNot(not, OpIsNull, OpIsNotNull), raw)
+			return nullPredicate(lhs, ifNot(not, source.OpIsNull, source.OpIsNotNull), raw)
 		}
 	}
-	op := ifNot(not, OpIs, OpIsNot)
+	op := ifNot(not, source.OpIs, source.OpIsNot)
 	if distinct {
-		op = ifNot(not, OpIsDistinctFrom, OpIsNotDistinctFrom)
+		op = ifNot(not, source.OpIsDistinctFrom, source.OpIsNotDistinctFrom)
 	}
 	return comparison(lhs, rhs, op, raw)
 }
@@ -346,7 +347,7 @@ func betweenPredicate(tested, low, high antlr.Tree, not bool, raw string) Predic
 		return Predicate{
 			Table:  t.table,
 			Column: t.col,
-			Op:     ifNot(not, OpBetween, OpNotBetween),
+			Op:     ifNot(not, source.OpBetween, source.OpNotBetween),
 			Values: []Value{*lo.val, *hi.val},
 			Raw:    raw,
 		}
@@ -379,7 +380,7 @@ func inPredicate(bin gen.IExpr_binaryContext, comps []gen.IExpr_comparisonContex
 	return Predicate{
 		Table:  tested.table,
 		Column: tested.col,
-		Op:     ifNot(not, OpIn, OpNotIn),
+		Op:     ifNot(not, source.OpIn, source.OpNotIn),
 		Values: values,
 		Raw:    raw,
 	}
@@ -387,37 +388,37 @@ func inPredicate(bin gen.IExpr_binaryContext, comps []gen.IExpr_comparisonContex
 
 func buildPredicateFromComparison(comp gen.IExpr_comparisonContext, raw string) Predicate {
 	bits := comp.AllExpr_bitwise()
-	if op := relationalOp(comp); op != OpNone && len(bits) == 2 {
+	if op := relationalOp(comp); op != source.OpNone && len(bits) == 2 {
 		return comparison(bits[0], bits[1], op, raw)
 	}
 	return Predicate{Raw: raw}
 }
 
-func equalityOp(bin gen.IExpr_binaryContext) Operator {
+func equalityOp(bin gen.IExpr_binaryContext) source.Operator {
 	switch {
 	case len(bin.AllEQ()) > 0 || len(bin.AllASSIGN()) > 0:
-		return OpEq
+		return source.OpEq
 	case len(bin.AllNOT_EQ1()) > 0 || len(bin.AllNOT_EQ2()) > 0:
-		return OpNotEq
+		return source.OpNotEq
 	}
-	return OpNone
+	return source.OpNone
 }
 
-func relationalOp(comp gen.IExpr_comparisonContext) Operator {
+func relationalOp(comp gen.IExpr_comparisonContext) source.Operator {
 	switch {
 	case len(comp.AllLT_EQ()) > 0:
-		return OpLte
+		return source.OpLte
 	case len(comp.AllGT_EQ()) > 0:
-		return OpGte
+		return source.OpGte
 	case len(comp.AllLT()) > 0:
-		return OpLt
+		return source.OpLt
 	case len(comp.AllGT()) > 0:
-		return OpGt
+		return source.OpGt
 	}
-	return OpNone
+	return source.OpNone
 }
 
-func nullPredicate(node antlr.Tree, op Operator, raw string) Predicate {
+func nullPredicate(node antlr.Tree, op source.Operator, raw string) Predicate {
 	if o := classify(node); o.isCol {
 		return Predicate{Table: o.table, Column: o.col, Op: op, Raw: raw}
 	}
@@ -426,7 +427,7 @@ func nullPredicate(node antlr.Tree, op Operator, raw string) Predicate {
 
 // comparison builds a "column op value" predicate from two operands in either
 // order, flipping the operator when the column is on the right.
-func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
+func comparison(left, right antlr.Tree, op source.Operator, raw string) Predicate {
 	l, r := classify(left), classify(right)
 	switch {
 	case l.isCol && r.isVal:
@@ -455,25 +456,25 @@ func comparison(left, right antlr.Tree, op Operator, raw string) Predicate {
 // commutable reports whether an operator can be rewritten with its operands
 // swapped (relational ops via flipOp, equality/identity ops unchanged). Pattern
 // operators are not commutative and must not be flipped.
-func commutable(op Operator) bool {
+func commutable(op source.Operator) bool {
 	switch op {
-	case OpLike, OpNotLike, OpGlob, OpNotGlob, OpRegexp, OpNotRegexp, OpMatch, OpNotMatch:
+	case source.OpLike, source.OpNotLike, source.OpGlob, source.OpNotGlob, source.OpRegexp, source.OpNotRegexp, source.OpMatch, source.OpNotMatch:
 		return false
 	default:
 		return true
 	}
 }
 
-func flipOp(op Operator) Operator {
+func flipOp(op source.Operator) source.Operator {
 	switch op {
-	case OpLt:
-		return OpGt
-	case OpLte:
-		return OpGte
-	case OpGt:
-		return OpLt
-	case OpGte:
-		return OpLte
+	case source.OpLt:
+		return source.OpGt
+	case source.OpLte:
+		return source.OpGte
+	case source.OpGt:
+		return source.OpLt
+	case source.OpGte:
+		return source.OpLte
 	default: // symmetric ops (=, <>, IS, IS [NOT] DISTINCT FROM) are unchanged
 		return op
 	}

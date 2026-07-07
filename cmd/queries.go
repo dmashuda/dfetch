@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/dmashuda/dfetch/internal/config"
+	"github.com/dmashuda/dfetch/config"
 	"github.com/spf13/cobra"
 )
 

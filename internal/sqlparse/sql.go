@@ -3,6 +3,8 @@ package sqlparse
 import (
 	"regexp"
 	"strings"
+
+	"github.com/dmashuda/dfetch/source"
 )
 
 // This file renders the typed AST back into SQL text. It reproduces the modeled
@@ -217,7 +219,7 @@ func renderPredicates(ps []Predicate) string {
 }
 
 func (p Predicate) sql() string {
-	if p.Op == OpNone {
+	if p.Op == source.OpNone {
 		return p.Raw
 	}
 
@@ -227,13 +229,13 @@ func (p Predicate) sql() string {
 	}
 
 	switch p.Op {
-	case OpIsNull, OpIsNotNull:
+	case source.OpIsNull, source.OpIsNotNull:
 		return col + " " + p.Op.String()
-	case OpBetween, OpNotBetween:
+	case source.OpBetween, source.OpNotBetween:
 		if len(p.Values) == 2 {
 			return col + " " + p.Op.String() + " " + p.Values[0].sql() + " AND " + p.Values[1].sql()
 		}
-	case OpIn, OpNotIn:
+	case source.OpIn, source.OpNotIn:
 		items := make([]string, len(p.Values))
 		for i, v := range p.Values {
 			items[i] = v.sql()

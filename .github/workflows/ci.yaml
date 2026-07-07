@@ -50,7 +50,7 @@ jobs:
       - name: Postgres connector integration tests
         env:
           DFETCH_TEST_POSTGRES_DSN: postgres://dfetch:dfetch@localhost:5432/dfetch?sslmode=disable
-        run: go test -tags integration ./internal/source/postgres/
+        run: go test -tags integration ./source/postgres/
 
   lint:
     runs-on: ubuntu-latest

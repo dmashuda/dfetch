@@ -98,19 +98,20 @@ generator/runner live in [`tools/examples`](tools/examples) over the tested
 
 ```
 cmd/                    cobra CLI: root, query, tables, version
-internal/config         YAML config loading (schema -> connector)
-internal/source         Connector interface + ScanRequest (push-down) + registry
-internal/source/github  GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
-internal/source/jaeger  Jaeger connector (spans, services, operations)
-internal/source/ckan    CKAN/data.gov connector (datasets, resources, organizations, groups)
-internal/source/docker  Docker connector (containers, images, volumes, networks), local unix socket
-internal/source/slack   Slack connector (channels, users, messages, search), Web API
-internal/source/newrelic New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
-internal/source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
-internal/source/jira    Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only via `type: jira`
+config                  YAML config loading (schema -> connector)
+source                  Connector interface + ScanRequest (push-down) + registry + Operator enum
+source/github           GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
+source/jaeger           Jaeger connector (spans, services, operations)
+source/ckan             CKAN/data.gov connector (datasets, resources, organizations, groups)
+source/docker           Docker connector (containers, images, volumes, networks), local unix socket
+source/slack            Slack connector (channels, users, messages, search), Web API
+source/newrelic         New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
+source/postgres         Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
+source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only via `type: jira`
+connectors              default connector set (Builtins/ConfigOnly/DefaultRegistry/DefaultOptions)
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
-internal/localdb        per-request local SQLite database (attach/create/insert/query)
-internal/engine         orchestration: parse -> plan push-down -> load -> resolve
+localdb                 per-request local SQLite database (attach/create/insert/query); default engine.DB
+engine                  orchestration: parse -> plan push-down -> load -> resolve; options-based New
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 internal/examples       render/check README query examples from examples.yaml
 tools/examples          dev CLI: gen/check/run the examples (make examples*)
@@ -123,7 +124,7 @@ A connector is registered under a SQL schema (e.g. `github`) and exposes tables
 
 1. **parse** the SQL into a typed AST (`internal/sqlparse`);
 2. for each schema-qualified source, **plan** a push-down `source.ScanRequest`
-   (filters / `ORDER BY` / `LIMIT`) — see `internal/engine/plan.go`;
+   (filters / `ORDER BY` / `LIMIT`) — see `engine/plan.go`;
 3. **attach** an in-memory schema, **create** the table, and **scan** the
    connector, loading each emitted chunk into SQLite as it arrives (sources are
    fetched concurrently; writes are serialized onto localdb's single connection);
@@ -137,10 +138,10 @@ guide — the `source.Connector` contract, the query lifecycle, push-down
 semantics, the table/column → SQLite mapping, streaming, registration, testing,
 worked examples, and a step-by-step + checklist — lives next to the code:
 
-**→ [`internal/source/README.md`](internal/source/README.md)**
+**→ [`source/README.md`](source/README.md)**
 
 It's detailed enough to hand to an agent as the basis for an implementation plan.
-The existing `internal/source/github` and `internal/source/jaeger` connectors are
+The existing `source/github` and `source/jaeger` connectors are
 the reference implementations.
 
 A connector with a large/unknown table set (a SQL warehouse) returns an empty

@@ -5,8 +5,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/dmashuda/dfetch/internal/config"
-	"github.com/dmashuda/dfetch/internal/engine"
+	"github.com/dmashuda/dfetch/config"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +24,7 @@ var tablesCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		eng, err := engine.New(cfg)
+		eng, err := newEngine(cfg)
 		if err != nil {
 			return fmt.Errorf("initializing engine: %w", err)
 		}

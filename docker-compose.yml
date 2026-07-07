@@ -32,7 +32,7 @@ services:
 
   # Local Postgres for the postgres connector's integration tests:
   #   DFETCH_TEST_POSTGRES_DSN='postgres://dfetch:dfetch@localhost:5432/dfetch?sslmode=disable' \
-  #     go test -tags integration ./internal/source/postgres/
+  #     go test -tags integration ./source/postgres/
   postgres:
     image: postgres:16
     container_name: dfetch-postgres

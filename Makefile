@@ -80,7 +80,7 @@ install:
 
 profile:
 	@mkdir -p $(PROFILE_DIR)
-	DFETCH_QUERY="$(PROFILE_QUERY)" go test ./internal/engine \
+	DFETCH_QUERY="$(PROFILE_QUERY)" go test ./engine \
 		-run '^$$' -bench '^BenchmarkProfileQuery$$' -benchmem -benchtime=$(BENCHTIME) \
 		-cpuprofile $(PROFILE_DIR)/cpu.prof \
 		-memprofile $(PROFILE_DIR)/mem.prof \

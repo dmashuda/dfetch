@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/dmashuda/dfetch/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -166,32 +167,32 @@ func TestASTWherePredicates(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.age >= 21 AND status = 'paid' AND name LIKE 'A%' AND qty <> 0")
 	require.Len(t, s.Where, 4)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: OpGte, Value: intValue(21), Raw: "t.age >= 21"}, s.Where[0])
-	assert.Equal(t, Predicate{Column: "status", Op: OpEq, Value: stringValue("'paid'", "paid"), Raw: "status = 'paid'"}, s.Where[1])
-	assert.Equal(t, Predicate{Column: "name", Op: OpLike, Value: stringValue("'A%'", "A%"), Raw: "name LIKE 'A%'"}, s.Where[2])
-	assert.Equal(t, Predicate{Column: "qty", Op: OpNotEq, Value: intValue(0), Raw: "qty <> 0"}, s.Where[3])
+	assert.Equal(t, Predicate{Table: "t", Column: "age", Op: source.OpGte, Value: intValue(21), Raw: "t.age >= 21"}, s.Where[0])
+	assert.Equal(t, Predicate{Column: "status", Op: source.OpEq, Value: stringValue("'paid'", "paid"), Raw: "status = 'paid'"}, s.Where[1])
+	assert.Equal(t, Predicate{Column: "name", Op: source.OpLike, Value: stringValue("'A%'", "A%"), Raw: "name LIKE 'A%'"}, s.Where[2])
+	assert.Equal(t, Predicate{Column: "qty", Op: source.OpNotEq, Value: intValue(0), Raw: "qty <> 0"}, s.Where[3])
 }
 
 func TestASTPredicateOperatorFlip(t *testing.T) {
 	// value on the left flips the operator so the column leads.
 	s := mustParse(t, "SELECT * FROM t WHERE 100 > t.qty")
 	require.Len(t, s.Where, 1)
-	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: OpLt, Value: intValue(100), Raw: "100 > t.qty"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "qty", Op: source.OpLt, Value: intValue(100), Raw: "100 > t.qty"}, s.Where[0])
 }
 
 func TestASTPatternOperators(t *testing.T) {
 	cases := []struct {
 		sql  string
-		want Operator
+		want source.Operator
 	}{
-		{"SELECT * FROM t WHERE name LIKE 'a%'", OpLike},
-		{"SELECT * FROM t WHERE name NOT LIKE 'a%'", OpNotLike}, // regression: NOT must not be dropped
-		{"SELECT * FROM t WHERE name GLOB 'a*'", OpGlob},
-		{"SELECT * FROM t WHERE name NOT GLOB 'a*'", OpNotGlob},
-		{"SELECT * FROM t WHERE name REGEXP '^a'", OpRegexp},
-		{"SELECT * FROM t WHERE name NOT REGEXP '^a'", OpNotRegexp},
-		{"SELECT * FROM t WHERE name MATCH 'a'", OpMatch},
-		{"SELECT * FROM t WHERE name NOT MATCH 'a'", OpNotMatch},
+		{"SELECT * FROM t WHERE name LIKE 'a%'", source.OpLike},
+		{"SELECT * FROM t WHERE name NOT LIKE 'a%'", source.OpNotLike}, // regression: NOT must not be dropped
+		{"SELECT * FROM t WHERE name GLOB 'a*'", source.OpGlob},
+		{"SELECT * FROM t WHERE name NOT GLOB 'a*'", source.OpNotGlob},
+		{"SELECT * FROM t WHERE name REGEXP '^a'", source.OpRegexp},
+		{"SELECT * FROM t WHERE name NOT REGEXP '^a'", source.OpNotRegexp},
+		{"SELECT * FROM t WHERE name MATCH 'a'", source.OpMatch},
+		{"SELECT * FROM t WHERE name NOT MATCH 'a'", source.OpNotMatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.want.String(), func(t *testing.T) {
@@ -207,12 +208,12 @@ func TestASTPatternOperators(t *testing.T) {
 func TestASTIsOperators(t *testing.T) {
 	cases := []struct {
 		sql  string
-		want Operator
+		want source.Operator
 	}{
-		{"SELECT * FROM t WHERE x IS 5", OpIs},
-		{"SELECT * FROM t WHERE x IS NOT 5", OpIsNot},
-		{"SELECT * FROM t WHERE x IS DISTINCT FROM 5", OpIsDistinctFrom},
-		{"SELECT * FROM t WHERE x IS NOT DISTINCT FROM 5", OpIsNotDistinctFrom},
+		{"SELECT * FROM t WHERE x IS 5", source.OpIs},
+		{"SELECT * FROM t WHERE x IS NOT 5", source.OpIsNot},
+		{"SELECT * FROM t WHERE x IS DISTINCT FROM 5", source.OpIsDistinctFrom},
+		{"SELECT * FROM t WHERE x IS NOT DISTINCT FROM 5", source.OpIsNotDistinctFrom},
 	}
 	for _, tc := range cases {
 		t.Run(tc.want.String(), func(t *testing.T) {
@@ -227,13 +228,13 @@ func TestASTBetween(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE age BETWEEN 18 AND 65")
 	require.Len(t, s.Where, 1)
 	assert.Equal(t, Predicate{
-		Column: "age", Op: OpBetween,
+		Column: "age", Op: source.OpBetween,
 		Values: []Value{intLit(18), intLit(65)},
 		Raw:    "age BETWEEN 18 AND 65",
 	}, s.Where[0])
 
 	s = mustParse(t, "SELECT * FROM t WHERE age NOT BETWEEN 18 AND 65")
-	assert.Equal(t, OpNotBetween, s.Where[0].Op)
+	assert.Equal(t, source.OpNotBetween, s.Where[0].Op)
 	assert.Len(t, s.Where[0].Values, 2)
 }
 
@@ -241,13 +242,13 @@ func TestASTIn(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE id IN (1, 2, 3)")
 	require.Len(t, s.Where, 1)
 	assert.Equal(t, Predicate{
-		Column: "id", Op: OpIn,
+		Column: "id", Op: source.OpIn,
 		Values: []Value{intLit(1), intLit(2), intLit(3)},
 		Raw:    "id IN (1, 2, 3)",
 	}, s.Where[0])
 
 	s = mustParse(t, "SELECT * FROM t WHERE id NOT IN (1, 2)")
-	assert.Equal(t, OpNotIn, s.Where[0].Op)
+	assert.Equal(t, source.OpNotIn, s.Where[0].Op)
 	assert.Len(t, s.Where[0].Values, 2)
 }
 
@@ -255,20 +256,20 @@ func TestASTUnstructuredMultiOperand(t *testing.T) {
 	// IN (subquery) and BETWEEN with non-literal bounds are preserved as raw.
 	in := mustParse(t, "SELECT * FROM t WHERE id IN (SELECT id FROM b)")
 	require.Len(t, in.Where, 1)
-	assert.Equal(t, OpNone, in.Where[0].Op)
+	assert.Equal(t, source.OpNone, in.Where[0].Op)
 	assert.Empty(t, in.Where[0].Values)
 
 	bt := mustParse(t, "SELECT * FROM t WHERE col BETWEEN a AND b")
-	assert.Equal(t, OpNone, bt.Where[0].Op)
+	assert.Equal(t, source.OpNone, bt.Where[0].Op)
 }
 
 func TestASTPredicateBindAndNull(t *testing.T) {
 	s := mustParse(t, "SELECT * FROM t WHERE t.id = :id AND t.deleted IS NULL AND t.name IS NOT NULL")
 	require.Len(t, s.Where, 3)
 
-	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: OpEq, Value: &Value{Kind: ValueBind, Bind: ":id"}, Raw: "t.id = :id"}, s.Where[0])
-	assert.Equal(t, Predicate{Table: "t", Column: "deleted", Op: OpIsNull, Raw: "t.deleted IS NULL"}, s.Where[1])
-	assert.Equal(t, Predicate{Table: "t", Column: "name", Op: OpIsNotNull, Raw: "t.name IS NOT NULL"}, s.Where[2])
+	assert.Equal(t, Predicate{Table: "t", Column: "id", Op: source.OpEq, Value: &Value{Kind: ValueBind, Bind: ":id"}, Raw: "t.id = :id"}, s.Where[0])
+	assert.Equal(t, Predicate{Table: "t", Column: "deleted", Op: source.OpIsNull, Raw: "t.deleted IS NULL"}, s.Where[1])
+	assert.Equal(t, Predicate{Table: "t", Column: "name", Op: source.OpIsNotNull, Raw: "t.name IS NOT NULL"}, s.Where[2])
 }
 
 func TestASTUnstructuredPredicatesKeepRaw(t *testing.T) {
@@ -286,7 +287,7 @@ func TestASTColumnToColumnPredicate(t *testing.T) {
 	require.Len(t, s.Joins[0].On, 1)
 
 	on := s.Joins[0].On[0]
-	assert.Equal(t, OpEq, on.Op)
+	assert.Equal(t, source.OpEq, on.Op)
 	assert.Equal(t, "a", on.Table)
 	assert.Equal(t, "id", on.Column)
 	assert.Equal(t, "b", on.RefTable)
@@ -390,9 +391,9 @@ func TestLiteralAccessors(t *testing.T) {
 }
 
 func TestEnumStrings(t *testing.T) {
-	assert.Equal(t, "=", OpEq.String())
-	assert.Equal(t, "IS NOT NULL", OpIsNotNull.String())
-	assert.Equal(t, "", OpNone.String())
+	assert.Equal(t, "=", source.OpEq.String())
+	assert.Equal(t, "IS NOT NULL", source.OpIsNotNull.String())
+	assert.Equal(t, "", source.OpNone.String())
 	assert.Equal(t, "LEFT", JoinLeft.String())
 	assert.Equal(t, "literal", ValueLiteral.String())
 	assert.Equal(t, "bind", ValueBind.String())

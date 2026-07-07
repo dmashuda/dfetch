@@ -3,6 +3,7 @@ package sqlparse
 import (
 	"testing"
 
+	"github.com/dmashuda/dfetch/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestPatternOpValueOnLeftNotFlipped(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			s := mustParse(t, sql)
 			require.Len(t, s.Where, 1)
-			assert.Equalf(t, OpNone, s.Where[0].Op, "non-commutative op must not be flipped (got structured predicate)")
+			assert.Equalf(t, source.OpNone, s.Where[0].Op, "non-commutative op must not be flipped (got structured predicate)")
 		})
 	}
 }
@@ -31,7 +32,7 @@ func TestPatternOpColumnOnLeftStillStructured(t *testing.T) {
 	// Regression: the normal column-on-left form stays structured.
 	s := mustParse(t, "SELECT * FROM t WHERE name LIKE 'a%'")
 	require.Len(t, s.Where, 1)
-	assert.Equal(t, OpLike, s.Where[0].Op)
+	assert.Equal(t, source.OpLike, s.Where[0].Op)
 	assert.Equal(t, "name", s.Where[0].Column)
 }
 
@@ -39,11 +40,11 @@ func TestRelationalFlipStillWorks(t *testing.T) {
 	// Regression: commutative/relational flips must keep working.
 	s := mustParse(t, "SELECT * FROM t WHERE 100 > a")
 	require.Len(t, s.Where, 1)
-	assert.Equal(t, OpLt, s.Where[0].Op)
+	assert.Equal(t, source.OpLt, s.Where[0].Op)
 	assert.Equal(t, "a", s.Where[0].Column)
 
 	s = mustParse(t, "SELECT * FROM t WHERE 5 = a")
-	assert.Equal(t, OpEq, s.Where[0].Op)
+	assert.Equal(t, source.OpEq, s.Where[0].Op)
 	assert.Equal(t, "a", s.Where[0].Column)
 }
 
