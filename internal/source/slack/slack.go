@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -316,7 +315,7 @@ func cursorPages(ctx context.Context, table string, cols []source.Column, stopAt
 // stringEq returns the string value of an equality filter on col, if present.
 func stringEq(req source.ScanRequest, col string) (string, bool) {
 	f, ok := req.Filter(col)
-	if !ok || f.Op != sqlparse.OpEq {
+	if !ok || f.Op != source.OpEq {
 		return "", false
 	}
 	s, ok := f.Value.(string)
@@ -336,7 +335,7 @@ func requireStringEq(req source.ScanRequest, col string) (string, error) {
 // intEq returns the int64 value of an equality filter on col, if present.
 func intEq(req source.ScanRequest, col string) (int64, bool) {
 	f, ok := req.Filter(col)
-	if !ok || f.Op != sqlparse.OpEq {
+	if !ok || f.Op != source.OpEq {
 		return 0, false
 	}
 	n, ok := f.Value.(int64)
@@ -376,7 +375,7 @@ func consumedAll(req source.ScanRequest, allowed ...string) bool {
 		set[a] = true
 	}
 	for _, f := range req.Filters {
-		if f.Op != sqlparse.OpEq || !set[f.Column] {
+		if f.Op != source.OpEq || !set[f.Column] {
 			return false
 		}
 	}

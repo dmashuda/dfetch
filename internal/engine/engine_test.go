@@ -6,7 +6,6 @@ import (
 
 	"github.com/dmashuda/dfetch/internal/config"
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +101,7 @@ func TestRunWithParamsBindsNamedParam(t *testing.T) {
 
 	// The bound value reached the connector as a pushed-down filter.
 	assert.Contains(t, conn.got.Filters,
-		source.Filter{Column: "title", Op: sqlparse.OpEq, Value: "b"})
+		source.Filter{Column: "title", Op: source.OpEq, Value: "b"})
 
 	// And the final result is filtered to the matching row.
 	require.Len(t, res.Rows, 1)
@@ -150,9 +149,9 @@ func TestRunPushdownAndResolve(t *testing.T) {
 
 	// Push-down: filters, order, and limit reached the connector.
 	assert.ElementsMatch(t, []source.Filter{
-		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
-		{Column: "repo", Op: sqlparse.OpEq, Value: "go"},
-		{Column: "state", Op: sqlparse.OpEq, Value: "open"},
+		{Column: "owner", Op: source.OpEq, Value: "golang"},
+		{Column: "repo", Op: source.OpEq, Value: "go"},
+		{Column: "state", Op: source.OpEq, Value: "open"},
 	}, conn.got.Filters)
 	assert.Equal(t, []source.OrderTerm{{Column: "updated_at", Desc: true}}, conn.got.OrderBy)
 	require.NotNil(t, conn.got.Limit)

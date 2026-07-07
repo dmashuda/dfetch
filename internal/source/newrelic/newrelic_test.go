@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -239,8 +238,8 @@ func TestScanNRDBPushdownLanded(t *testing.T) {
 		Table:   "Transaction",
 		Columns: []string{"appName", "timestamp"},
 		Filters: []source.Filter{
-			{Column: "appName", Op: sqlparse.OpEq, Value: "billing"},
-			{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(1750000000000)},
+			{Column: "appName", Op: source.OpEq, Value: "billing"},
+			{Column: "timestamp", Op: source.OpGte, Value: int64(1750000000000)},
 		},
 		OrderBy: []source.OrderTerm{{Column: "timestamp", Desc: true}},
 		Limit:   &limit,
@@ -288,7 +287,7 @@ func TestScanNRDBWarnings(t *testing.T) {
 	c2 := newTestConnector(t, nil, h2)
 	rows, err = collectScan(c2, source.ScanRequest{
 		Table:   "Transaction",
-		Filters: []source.Filter{{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(1750000000000)}},
+		Filters: []source.Filter{{Column: "timestamp", Op: source.OpGte, Value: int64(1750000000000)}},
 	})
 	require.NoError(t, err)
 	assert.Empty(t, rows.Warnings)
@@ -367,7 +366,7 @@ func TestScanEntitiesPaginatesAndPushesSearch(t *testing.T) {
 
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "entities",
-		Filters: []source.Filter{{Column: "name", Op: sqlparse.OpEq, Value: "svc"}},
+		Filters: []source.Filter{{Column: "name", Op: source.OpEq, Value: "svc"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, rows.Rows, 2) // both pages
@@ -400,7 +399,7 @@ func TestScanEntitiesFilterBlocksEarlyStop(t *testing.T) {
 	limit := 1
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "entities",
-		Filters: []source.Filter{{Column: "name", Op: sqlparse.OpEq, Value: "svc"}},
+		Filters: []source.Filter{{Column: "name", Op: source.OpEq, Value: "svc"}},
 		Limit:   &limit,
 	})
 	require.NoError(t, err)
@@ -446,7 +445,7 @@ func TestScanConditionsPushesPolicyID(t *testing.T) {
 	limit := 1
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "alert_conditions",
-		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: "123"}},
+		Filters: []source.Filter{{Column: "policy_id", Op: source.OpEq, Value: "123"}},
 		Limit:   &limit,
 	})
 	require.NoError(t, err)
@@ -478,7 +477,7 @@ func TestScanConditionsNonStringPolicyIDBlocksEarlyStop(t *testing.T) {
 	limit := 1
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "alert_conditions",
-		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: int64(123)}},
+		Filters: []source.Filter{{Column: "policy_id", Op: source.OpEq, Value: int64(123)}},
 		Limit:   &limit,
 	})
 	require.NoError(t, err)
@@ -499,7 +498,7 @@ func TestScanConditionsMissingPolicyIsEmpty(t *testing.T) {
 
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "alert_conditions",
-		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: "42"}},
+		Filters: []source.Filter{{Column: "policy_id", Op: source.OpEq, Value: "42"}},
 	})
 	require.NoError(t, err)
 	assert.Empty(t, rows.Rows)
@@ -511,7 +510,7 @@ func TestScanConditionsMissingPolicyIsEmpty(t *testing.T) {
 	c2 := newTestConnector(t, nil, h2)
 	_, err = collectScan(c2, source.ScanRequest{
 		Table:   "alert_conditions",
-		Filters: []source.Filter{{Column: "policy_id", Op: sqlparse.OpEq, Value: "42"}},
+		Filters: []source.Filter{{Column: "policy_id", Op: source.OpEq, Value: "42"}},
 	})
 	require.Error(t, err)
 }

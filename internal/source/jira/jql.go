@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
 // jqlTimeLayout is the JQL date-time literal format ("yyyy-MM-dd HH:mm"); JQL
@@ -115,7 +114,7 @@ func translateFilter(f source.Filter) (clause string, exact, ok bool) {
 // string is never pushed: Jira rejects `field = ""` as invalid JQL (failing
 // the whole query), while the local re-filter handles it for free.
 func translateEq(f source.Filter, field string) (clause string, exact, ok bool) {
-	if f.Op != sqlparse.OpEq {
+	if f.Op != source.OpEq {
 		return "", false, false
 	}
 	s, ok := f.Value.(string)
@@ -130,9 +129,9 @@ func translateEq(f source.Filter, field string) (clause string, exact, ok bool) 
 // strings are never pushed (see translateEq).
 func translateKeyish(f source.Filter, field string) (clause string, exact, ok bool) {
 	switch f.Op {
-	case sqlparse.OpEq:
+	case source.OpEq:
 		return translateEq(f, field)
-	case sqlparse.OpIn:
+	case source.OpIn:
 		if len(f.Values) == 0 {
 			return "", false, false
 		}
@@ -170,19 +169,19 @@ const tzSlack = 24 * time.Hour
 // is never exact — a range filter always blocks LIMIT push.
 func translateRange(f source.Filter, field string) (clause string, exact, ok bool) {
 	switch f.Op {
-	case sqlparse.OpGt, sqlparse.OpGte:
+	case source.OpGt, source.OpGte:
 		t, ok := parseJQLTime(f.Value)
 		if !ok {
 			return "", false, false
 		}
 		return field + " >= " + quoteJQLTime(floorMinute(t.Add(-tzSlack))), false, true
-	case sqlparse.OpLt, sqlparse.OpLte:
+	case source.OpLt, source.OpLte:
 		t, ok := parseJQLTime(f.Value)
 		if !ok {
 			return "", false, false
 		}
 		return field + " <= " + quoteJQLTime(ceilMinute(t.Add(tzSlack))), false, true
-	case sqlparse.OpBetween:
+	case source.OpBetween:
 		if len(f.Values) != 2 {
 			return "", false, false
 		}

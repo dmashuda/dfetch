@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -286,11 +285,11 @@ func stringEqOrIn(req source.ScanRequest, col string) []string {
 		return nil
 	}
 	switch f.Op {
-	case sqlparse.OpEq:
+	case source.OpEq:
 		if s, ok := f.Value.(string); ok && s != "" {
 			return []string{s}
 		}
-	case sqlparse.OpIn:
+	case source.OpIn:
 		out := make([]string, 0, len(f.Values))
 		for _, v := range f.Values {
 			if s, ok := v.(string); ok && s != "" {

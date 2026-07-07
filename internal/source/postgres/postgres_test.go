@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -49,8 +48,8 @@ func TestBuildSelectStarWhenNoColumns(t *testing.T) {
 
 func TestBuildSelectWhere(t *testing.T) {
 	req := source.ScanRequest{Table: "orders", Filters: []source.Filter{
-		{Column: "status", Op: sqlparse.OpEq, Value: "paid"},
-		{Column: "total", Op: sqlparse.OpGte, Value: int64(5)},
+		{Column: "status", Op: source.OpEq, Value: "paid"},
+		{Column: "total", Op: source.OpGte, Value: int64(5)},
 	}}
 	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t, `SELECT * FROM "public"."orders" WHERE "status" = $1 AND "total" >= $2 LIMIT 100000`, sql)
@@ -59,8 +58,8 @@ func TestBuildSelectWhere(t *testing.T) {
 
 func TestBuildSelectInAndBetween(t *testing.T) {
 	req := source.ScanRequest{Table: "orders", Filters: []source.Filter{
-		{Column: "status", Op: sqlparse.OpIn, Values: []any{"paid", "shipped"}},
-		{Column: "id", Op: sqlparse.OpBetween, Values: []any{int64(1), int64(9)}},
+		{Column: "status", Op: source.OpIn, Values: []any{"paid", "shipped"}},
+		{Column: "id", Op: source.OpBetween, Values: []any{int64(1), int64(9)}},
 	}}
 	sql, args, _ := buildSelect("public", req, orders, 100000)
 	assert.Equal(t,
@@ -73,7 +72,7 @@ func TestBuildSelectInAndBetween(t *testing.T) {
 func TestBuildSelectSkipsLikeAndDoesNotPushLimit(t *testing.T) {
 	req := source.ScanRequest{
 		Table:   "orders",
-		Filters: []source.Filter{{Column: "status", Op: sqlparse.OpLike, Value: "paid%"}},
+		Filters: []source.Filter{{Column: "status", Op: source.OpLike, Value: "paid%"}},
 		OrderBy: []source.OrderTerm{{Column: "id", Desc: true}},
 		Limit:   intPtr(5),
 	}
@@ -87,7 +86,7 @@ func TestBuildSelectSkipsLikeAndDoesNotPushLimit(t *testing.T) {
 func TestBuildSelectPushesOrderAndLimit(t *testing.T) {
 	req := source.ScanRequest{
 		Table:   "orders",
-		Filters: []source.Filter{{Column: "status", Op: sqlparse.OpEq, Value: "paid"}},
+		Filters: []source.Filter{{Column: "status", Op: source.OpEq, Value: "paid"}},
 		OrderBy: []source.OrderTerm{{Column: "created_at", Desc: true}},
 		Limit:   intPtr(5),
 		Offset:  intPtr(3),

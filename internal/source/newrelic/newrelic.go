@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/codes"
@@ -500,7 +499,7 @@ func limitSafe(req source.ScanRequest, consumed ...string) bool {
 		set[c] = true
 	}
 	for _, f := range req.Filters {
-		if f.Op != sqlparse.OpEq || !set[f.Column] {
+		if f.Op != source.OpEq || !set[f.Column] {
 			return false
 		}
 	}

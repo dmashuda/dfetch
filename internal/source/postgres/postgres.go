@@ -18,7 +18,6 @@ import (
 
 	"github.com/XSAM/otelsql"
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -401,19 +400,19 @@ func translateFilter(f source.Filter, args *[]any) (string, bool) {
 		return fmt.Sprintf("$%d", len(*args))
 	}
 	switch f.Op {
-	case sqlparse.OpEq:
+	case source.OpEq:
 		return col + " = " + ph(f.Value), true
-	case sqlparse.OpNotEq:
+	case source.OpNotEq:
 		return col + " <> " + ph(f.Value), true
-	case sqlparse.OpLt:
+	case source.OpLt:
 		return col + " < " + ph(f.Value), true
-	case sqlparse.OpLte:
+	case source.OpLte:
 		return col + " <= " + ph(f.Value), true
-	case sqlparse.OpGt:
+	case source.OpGt:
 		return col + " > " + ph(f.Value), true
-	case sqlparse.OpGte:
+	case source.OpGte:
 		return col + " >= " + ph(f.Value), true
-	case sqlparse.OpIn, sqlparse.OpNotIn:
+	case source.OpIn, source.OpNotIn:
 		if len(f.Values) == 0 {
 			return "", false
 		}
@@ -422,16 +421,16 @@ func translateFilter(f source.Filter, args *[]any) (string, bool) {
 			ps[i] = ph(v)
 		}
 		op := "IN"
-		if f.Op == sqlparse.OpNotIn {
+		if f.Op == source.OpNotIn {
 			op = "NOT IN"
 		}
 		return col + " " + op + " (" + strings.Join(ps, ", ") + ")", true
-	case sqlparse.OpBetween, sqlparse.OpNotBetween:
+	case source.OpBetween, source.OpNotBetween:
 		if len(f.Values) != 2 {
 			return "", false
 		}
 		op := "BETWEEN"
-		if f.Op == sqlparse.OpNotBetween {
+		if f.Op == source.OpNotBetween {
 			op = "NOT BETWEEN"
 		}
 		return col + " " + op + " " + ph(f.Values[0]) + " AND " + ph(f.Values[1]), true

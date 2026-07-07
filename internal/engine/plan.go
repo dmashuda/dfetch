@@ -88,7 +88,7 @@ func neededColumns(stmt *sqlparse.Select, src sqlparse.Source, cols map[string]b
 	markPredicates := func(ps []sqlparse.Predicate) bool {
 		for i := range ps {
 			p := &ps[i]
-			if p.Op == sqlparse.OpNone {
+			if p.Op == source.OpNone {
 				return false // raw/unmodeled conjunct — its column refs are invisible
 			}
 			mark(p.Table, p.Column)
@@ -231,7 +231,7 @@ func allOtherColumnsPinned(stmt *sqlparse.Select, src sqlparse.Source) bool {
 	}
 	for _, p := range allPredicates(stmt) {
 		switch {
-		case p.Op == sqlparse.OpNone: // unstructured/raw conjunct — can't analyze
+		case p.Op == source.OpNone: // unstructured/raw conjunct — can't analyze
 			return false
 		case p.Table == "": // unqualified — ambiguous in a multi-source query
 			return false
@@ -320,7 +320,7 @@ func inferJoinFilters(stmt *sqlparse.Select, src sqlparse.Source, cols, have map
 			return
 		}
 		have[column] = true
-		out = append(out, source.Filter{Column: column, Op: sqlparse.OpEq, Value: val})
+		out = append(out, source.Filter{Column: column, Op: source.OpEq, Value: val})
 	}
 
 	for _, p := range pairs {
@@ -346,7 +346,7 @@ func literalEqualities(stmt *sqlparse.Select) map[colRef]*sqlparse.Value {
 	collect := func(ps []sqlparse.Predicate) {
 		for i := range ps {
 			p := &ps[i]
-			if p.Op == sqlparse.OpEq && p.Value != nil && p.Table != "" {
+			if p.Op == source.OpEq && p.Value != nil && p.Table != "" {
 				out[colRef{p.Table, p.Column}] = p.Value
 			}
 		}
@@ -365,7 +365,7 @@ func equiJoinPairs(stmt *sqlparse.Select) [][2]colRef {
 	collect := func(ps []sqlparse.Predicate) {
 		for i := range ps {
 			p := &ps[i]
-			if p.Op == sqlparse.OpEq && p.RefColumn != "" && p.Table != "" && p.RefTable != "" {
+			if p.Op == source.OpEq && p.RefColumn != "" && p.Table != "" && p.RefTable != "" {
 				out = append(out, [2]colRef{{p.Table, p.Column}, {p.RefTable, p.RefColumn}})
 			}
 		}
@@ -406,9 +406,9 @@ func columnSet(ts source.TableSchema) map[string]bool {
 // pushable.
 func toFilter(p sqlparse.Predicate, params map[string]any) (source.Filter, bool) {
 	switch p.Op {
-	case sqlparse.OpNone, sqlparse.OpIsNull, sqlparse.OpIsNotNull:
+	case source.OpNone, source.OpIsNull, source.OpIsNotNull:
 		return source.Filter{}, false
-	case sqlparse.OpIn, sqlparse.OpNotIn, sqlparse.OpBetween, sqlparse.OpNotBetween:
+	case source.OpIn, source.OpNotIn, source.OpBetween, source.OpNotBetween:
 		vals := make([]any, 0, len(p.Values))
 		for i := range p.Values {
 			v, ok := resolveValue(&p.Values[i], params)

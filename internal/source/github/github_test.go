@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +26,7 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 }
 
 func eqFilter(col, val string) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
+	return source.Filter{Column: col, Op: source.OpEq, Value: val}
 }
 
 // collectScan runs Scan and accumulates every emitted chunk into one Rows, so
@@ -651,7 +650,7 @@ func TestScanArtifactsByRun(t *testing.T) {
 		Table: "artifacts",
 		Filters: []source.Filter{
 			eqFilter("owner", "o"), eqFilter("repo", "r"),
-			{Column: "workflow_run_id", Op: sqlparse.OpEq, Value: int64(42)},
+			{Column: "workflow_run_id", Op: source.OpEq, Value: int64(42)},
 		},
 	})
 	require.NoError(t, err)

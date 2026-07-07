@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,14 +46,14 @@ func TestTableSchemaColumnNames(t *testing.T) {
 
 func TestScanRequestFilter(t *testing.T) {
 	req := ScanRequest{Filters: []Filter{
-		{Column: "state", Op: sqlparse.OpEq, Value: "open"},
-		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
+		{Column: "state", Op: OpEq, Value: "open"},
+		{Column: "owner", Op: OpEq, Value: "golang"},
 	}}
 
 	f, ok := req.Filter("owner")
 	require.True(t, ok)
 	assert.Equal(t, "golang", f.Value)
-	assert.Equal(t, sqlparse.OpEq, f.Op)
+	assert.Equal(t, OpEq, f.Op)
 
 	_, ok = req.Filter("missing")
 	assert.False(t, ok)

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
 // Curated tables: fixed schemas served from NerdGraph object queries (as
@@ -69,7 +68,7 @@ var curatedTables = map[string][]source.Column{
 // stringEq returns the string value of an equality filter on column, if any.
 func stringEq(req source.ScanRequest, column string) (string, bool) {
 	f, ok := req.Filter(column)
-	if !ok || f.Op != sqlparse.OpEq {
+	if !ok || f.Op != source.OpEq {
 		return "", false
 	}
 	s, ok := f.Value.(string)

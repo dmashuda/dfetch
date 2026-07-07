@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -180,7 +179,7 @@ func apiMessage(body []byte) string {
 // stringEq returns the string value of an equality filter on col, if present.
 func stringEq(req source.ScanRequest, col string) (string, bool) {
 	f, ok := req.Filter(col)
-	if !ok || f.Op != sqlparse.OpEq {
+	if !ok || f.Op != source.OpEq {
 		return "", false
 	}
 	s, ok := f.Value.(string)
@@ -210,7 +209,7 @@ func hasStartTimeLowerBound(req source.ScanRequest) bool {
 			continue
 		}
 		switch f.Op {
-		case sqlparse.OpGt, sqlparse.OpGte, sqlparse.OpBetween:
+		case source.OpGt, source.OpGte, source.OpBetween:
 			return true
 		}
 	}
@@ -225,15 +224,15 @@ func timeBounds(req source.ScanRequest, now time.Time, window time.Duration) (mi
 			continue
 		}
 		switch f.Op {
-		case sqlparse.OpGt, sqlparse.OpGte:
+		case source.OpGt, source.OpGte:
 			if t, slack, ok := parseTime(f.Value); ok {
 				min, minSet = t.Add(-slack), true
 			}
-		case sqlparse.OpLt, sqlparse.OpLte:
+		case source.OpLt, source.OpLte:
 			if t, slack, ok := parseTime(f.Value); ok {
 				max, maxSet = t.Add(slack), true
 			}
-		case sqlparse.OpBetween:
+		case source.OpBetween:
 			if len(f.Values) == 2 {
 				if t, slack, ok := parseTime(f.Values[0]); ok {
 					min, minSet = t.Add(-slack), true
@@ -299,15 +298,15 @@ func durationBounds(req source.ScanRequest) (min, max string) {
 			continue
 		}
 		switch f.Op {
-		case sqlparse.OpGt, sqlparse.OpGte:
+		case source.OpGt, source.OpGte:
 			if s, ok := durSeconds(f.Value); ok {
 				min = s
 			}
-		case sqlparse.OpLt, sqlparse.OpLte:
+		case source.OpLt, source.OpLte:
 			if s, ok := durSeconds(f.Value); ok {
 				max = s
 			}
-		case sqlparse.OpBetween:
+		case source.OpBetween:
 			if len(f.Values) == 2 {
 				if s, ok := durSeconds(f.Values[0]); ok {
 					min = s

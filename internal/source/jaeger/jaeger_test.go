@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +35,7 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 }
 
 func eqFilter(col, val string) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
+	return source.Filter{Column: col, Op: source.OpEq, Value: val}
 }
 
 // collectScan runs Scan and accumulates every emitted chunk into one Rows,
@@ -148,9 +147,9 @@ func TestScanSpansPushdown(t *testing.T) {
 		Filters: []source.Filter{
 			eqFilter("service_name", "dfetch"),
 			eqFilter("operation_name", "engine.Run"),
-			{Column: "start_time", Op: sqlparse.OpGte, Value: "2026-06-01T00:00:00Z"},
-			{Column: "start_time", Op: sqlparse.OpLt, Value: "2026-06-02T00:00:00Z"},
-			{Column: "duration_ms", Op: sqlparse.OpGt, Value: int64(5)},
+			{Column: "start_time", Op: source.OpGte, Value: "2026-06-01T00:00:00Z"},
+			{Column: "start_time", Op: source.OpLt, Value: "2026-06-02T00:00:00Z"},
+			{Column: "duration_ms", Op: source.OpGt, Value: int64(5)},
 		},
 		Limit: &limit, // must NOT be pushed
 	})
@@ -196,7 +195,7 @@ func TestScanSpansUpperBoundOnlyTimeWindow(t *testing.T) {
 		Table: "spans",
 		Filters: []source.Filter{
 			eqFilter("service_name", "dfetch"),
-			{Column: "start_time", Op: sqlparse.OpLt, Value: "2020-01-01T00:00:00Z"},
+			{Column: "start_time", Op: source.OpLt, Value: "2020-01-01T00:00:00Z"},
 		},
 	})
 	require.NoError(t, err)
@@ -247,12 +246,12 @@ func TestTimeBoundsSlack(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			min, _ := timeBounds(source.ScanRequest{Filters: []source.Filter{
-				{Column: "start_time", Op: sqlparse.OpGte, Value: tc.literal},
+				{Column: "start_time", Op: source.OpGte, Value: tc.literal},
 			}}, now, defaultWindow)
 			assert.Equal(t, tc.wantMin, min.UTC().Format(time.RFC3339Nano), "min")
 
 			_, max := timeBounds(source.ScanRequest{Filters: []source.Filter{
-				{Column: "start_time", Op: sqlparse.OpLte, Value: tc.literal},
+				{Column: "start_time", Op: source.OpLte, Value: tc.literal},
 			}}, now, defaultWindow)
 			assert.Equal(t, tc.wantMax, max.UTC().Format(time.RFC3339Nano), "max")
 		})
@@ -305,7 +304,7 @@ func TestScanSpansUpperBoundOnlyWarns(t *testing.T) {
 		Table: "spans",
 		Filters: []source.Filter{
 			eqFilter("service_name", "dfetch"),
-			{Column: "start_time", Op: sqlparse.OpLt, Value: "2026-01-01T00:00:00Z"},
+			{Column: "start_time", Op: source.OpLt, Value: "2026-01-01T00:00:00Z"},
 		},
 	})
 	require.NoError(t, err)
@@ -322,7 +321,7 @@ func TestScanSpansWithStartTimeNoWindowWarning(t *testing.T) {
 		Table: "spans",
 		Filters: []source.Filter{
 			eqFilter("service_name", "dfetch"),
-			{Column: "start_time", Op: sqlparse.OpGte, Value: "2026-01-01T00:00:00Z"},
+			{Column: "start_time", Op: source.OpGte, Value: "2026-01-01T00:00:00Z"},
 		},
 	})
 	require.NoError(t, err)

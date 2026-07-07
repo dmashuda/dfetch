@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +22,7 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 }
 
 func eqFilter(col, val string) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
+	return source.Filter{Column: col, Op: source.OpEq, Value: val}
 }
 
 // collectScan runs Scan and accumulates every emitted chunk into one Rows,
@@ -155,7 +154,7 @@ func TestScanDatasetsPushesFilters(t *testing.T) {
 		Filters: []source.Filter{
 			eqFilter("q", "climate"),
 			eqFilter("organization", "epa"),
-			{Column: "res_format", Op: sqlparse.OpIn, Values: []any{}}, // ignored: not pushable column
+			{Column: "res_format", Op: source.OpIn, Values: []any{}}, // ignored: not pushable column
 		},
 	})
 	// Only the pushable filters land; the unknown column is dropped here but
@@ -189,7 +188,7 @@ func TestScanDatasetsRejectsNonEqualityQ(t *testing.T) {
 	// returning zero rows.
 	_, err := collectScan(c, source.ScanRequest{
 		Table:   "datasets",
-		Filters: []source.Filter{{Column: "q", Op: sqlparse.OpLike, Value: "%climate%"}},
+		Filters: []source.Filter{{Column: "q", Op: source.OpLike, Value: "%climate%"}},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "q column supports only equality")
@@ -202,7 +201,7 @@ func TestScanResourcesRejectsNonEqualityQ(t *testing.T) {
 	})
 	_, err := collectScan(c, source.ScanRequest{
 		Table:   "resources",
-		Filters: []source.Filter{{Column: "q", Op: sqlparse.OpIn, Values: []any{"a", "b"}}},
+		Filters: []source.Filter{{Column: "q", Op: source.OpIn, Values: []any{"a", "b"}}},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "q column supports only equality")
@@ -217,7 +216,7 @@ func TestScanDatasetsPushesDateRange(t *testing.T) {
 	_, err := collectScan(c, source.ScanRequest{
 		Table: "datasets",
 		Filters: []source.Filter{
-			{Column: "metadata_modified", Op: sqlparse.OpGte, Value: "2020-01-01"},
+			{Column: "metadata_modified", Op: source.OpGte, Value: "2020-01-01"},
 		},
 	})
 	require.NoError(t, err)
@@ -237,7 +236,7 @@ func TestScanDatasetsDateRangeDoesNotPushLimit(t *testing.T) {
 	_, err := collectScan(c, source.ScanRequest{
 		Table: "datasets",
 		Filters: []source.Filter{
-			{Column: "metadata_modified", Op: sqlparse.OpGte, Value: "2020-01-01"},
+			{Column: "metadata_modified", Op: source.OpGte, Value: "2020-01-01"},
 		},
 		OrderBy: []source.OrderTerm{{Column: "metadata_modified", Desc: true}},
 		Limit:   &limit,
@@ -280,7 +279,7 @@ func TestScanDatasetsSubSecondBoundsWiden(t *testing.T) {
 		Table: "datasets",
 		Filters: []source.Filter{
 			{
-				Column: "metadata_modified", Op: sqlparse.OpBetween,
+				Column: "metadata_modified", Op: source.OpBetween,
 				Values: []any{"2020-01-01T10:00:00.4Z", "2020-06-01T10:00:05.7Z"},
 			},
 		},
@@ -367,7 +366,7 @@ func TestScanDatasetsUnconsumedFilterDoesNotPushLimit(t *testing.T) {
 	// is a superset and LIMIT must not be pushed.
 	_, err := collectScan(c, source.ScanRequest{
 		Table:   "datasets",
-		Filters: []source.Filter{{Column: "title", Op: sqlparse.OpLike, Value: "%air%"}},
+		Filters: []source.Filter{{Column: "title", Op: source.OpLike, Value: "%air%"}},
 		Limit:   &limit,
 	})
 	require.NoError(t, err)

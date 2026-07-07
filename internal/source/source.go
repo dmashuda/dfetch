@@ -9,8 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
 // ErrNotImplemented is returned by connectors that are not yet wired up.
@@ -45,7 +43,7 @@ func (t TableSchema) ColumnNames() []string {
 // BETWEEN. Bind parameters are not pushed down.
 type Filter struct {
 	Column string
-	Op     sqlparse.Operator
+	Op     Operator
 	Value  any
 	Values []any
 }

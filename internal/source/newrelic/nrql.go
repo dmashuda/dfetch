@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
 // This file is the pure core of the dynamic NRDB path: translating a pushed-down
@@ -135,23 +134,23 @@ func projectCols(requested []string, cols []source.Column) []source.Column {
 func translateNRQLFilter(f source.Filter, boolCols map[string]bool) (string, bool) {
 	col := quoteAttr(f.Column)
 	switch f.Op {
-	case sqlparse.OpEq, sqlparse.OpNotEq:
+	case source.OpEq, source.OpNotEq:
 		lit, ok := renderValue(f.Column, f.Value, boolCols)
 		if !ok {
 			return "", false
 		}
 		op := "="
-		if f.Op == sqlparse.OpNotEq {
+		if f.Op == source.OpNotEq {
 			op = "!="
 		}
 		return col + " " + op + " " + lit, true
-	case sqlparse.OpLt, sqlparse.OpLte, sqlparse.OpGt, sqlparse.OpGte:
+	case source.OpLt, source.OpLte, source.OpGt, source.OpGte:
 		lit, ok := renderNumber(f.Value)
 		if !ok {
 			return "", false
 		}
 		return col + " " + relOp(f.Op) + " " + lit, true
-	case sqlparse.OpIn, sqlparse.OpNotIn:
+	case source.OpIn, source.OpNotIn:
 		if len(f.Values) == 0 {
 			return "", false
 		}
@@ -164,11 +163,11 @@ func translateNRQLFilter(f source.Filter, boolCols map[string]bool) (string, boo
 			lits = append(lits, lit)
 		}
 		op := "IN"
-		if f.Op == sqlparse.OpNotIn {
+		if f.Op == source.OpNotIn {
 			op = "NOT IN"
 		}
 		return col + " " + op + " (" + strings.Join(lits, ", ") + ")", true
-	case sqlparse.OpBetween:
+	case source.OpBetween:
 		if len(f.Values) != 2 {
 			return "", false
 		}
@@ -183,13 +182,13 @@ func translateNRQLFilter(f source.Filter, boolCols map[string]bool) (string, boo
 	}
 }
 
-func relOp(op sqlparse.Operator) string {
+func relOp(op source.Operator) string {
 	switch op {
-	case sqlparse.OpLt:
+	case source.OpLt:
 		return "<"
-	case sqlparse.OpLte:
+	case source.OpLte:
 		return "<="
-	case sqlparse.OpGt:
+	case source.OpGt:
 		return ">"
 	default:
 		return ">="
@@ -284,20 +283,20 @@ func timestampBounds(req source.ScanRequest, now time.Time, window time.Duration
 			continue
 		}
 		switch f.Op {
-		case sqlparse.OpGt, sqlparse.OpGte:
+		case source.OpGt, source.OpGte:
 			if v, ok := msValue(f.Value); ok {
 				lowers = append(lowers, v)
 			}
-		case sqlparse.OpLt, sqlparse.OpLte:
+		case source.OpLt, source.OpLte:
 			if v, ok := msValue(f.Value); ok {
 				uppers = append(uppers, v)
 			}
-		case sqlparse.OpEq:
+		case source.OpEq:
 			if v, ok := msValue(f.Value); ok {
 				lowers = append(lowers, v)
 				uppers = append(uppers, v)
 			}
-		case sqlparse.OpBetween:
+		case source.OpBetween:
 			if len(f.Values) == 2 {
 				if lo, ok := msValue(f.Values[0]); ok {
 					lowers = append(lowers, lo)
@@ -306,7 +305,7 @@ func timestampBounds(req source.ScanRequest, now time.Time, window time.Duration
 					uppers = append(uppers, hi)
 				}
 			}
-		case sqlparse.OpIn:
+		case source.OpIn:
 			// IN is a disjunction: the filter as a whole bounds the window by
 			// the smallest and largest listed values — appending each value to
 			// both sides would AND them and invert the window. If any value is

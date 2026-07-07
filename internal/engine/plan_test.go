@@ -19,7 +19,7 @@ func TestPlanResolvesBindParam(t *testing.T) {
 	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}}}
 
 	req := planScan(q.Stmt, q.Stmt.From[0], ts, map[string]any{"owner": "golang"})
-	assert.Equal(t, []source.Filter{{Column: "owner", Op: sqlparse.OpEq, Value: "golang"}}, req.Filters)
+	assert.Equal(t, []source.Filter{{Column: "owner", Op: source.OpEq, Value: "golang"}}, req.Filters)
 }
 
 // An unbound parameter is not pushable: it is left for the local SQLite engine
@@ -38,7 +38,7 @@ func TestPlanUnboundParamNotPushed(t *testing.T) {
 // a param key. A bound-but-nil value and unnamed positional binds are not pushed.
 func TestPlanResolvesBindSigils(t *testing.T) {
 	ts := source.TableSchema{Name: "issues", Columns: []source.Column{{Name: "owner"}}}
-	want := []source.Filter{{Column: "owner", Op: sqlparse.OpEq, Value: "golang"}}
+	want := []source.Filter{{Column: "owner", Op: source.OpEq, Value: "golang"}}
 
 	for _, sigil := range []string{"@", "$"} {
 		q, err := sqlparse.Parse("SELECT * FROM github.issues WHERE owner = " + sigil + "owner")
@@ -219,9 +219,9 @@ func TestPlanScanFiltersAndOrder(t *testing.T) {
 	req := planFor(t, "SELECT * FROM github.issues WHERE owner='golang' AND state='open' AND comments > 5 ORDER BY updated_at DESC LIMIT 10")
 
 	assert.ElementsMatch(t, []source.Filter{
-		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
-		{Column: "state", Op: sqlparse.OpEq, Value: "open"},
-		{Column: "comments", Op: sqlparse.OpGt, Value: int64(5)},
+		{Column: "owner", Op: source.OpEq, Value: "golang"},
+		{Column: "state", Op: source.OpEq, Value: "open"},
+		{Column: "comments", Op: source.OpGt, Value: int64(5)},
 	}, req.Filters)
 	assert.Equal(t, []source.OrderTerm{{Column: "updated_at", Desc: true}}, req.OrderBy)
 	require.NotNil(t, req.Limit)
@@ -304,8 +304,8 @@ func TestPlanScanInfersJoinPartnerFilters(t *testing.T) {
 
 	req := planScan(q.Stmt, reposSrc, reposTS, nil)
 	assert.ElementsMatch(t, []source.Filter{
-		{Column: "owner", Op: sqlparse.OpEq, Value: "golang"},
-		{Column: "name", Op: sqlparse.OpEq, Value: "go"},
+		{Column: "owner", Op: source.OpEq, Value: "golang"},
+		{Column: "name", Op: source.OpEq, Value: "go"},
 	}, req.Filters)
 }
 

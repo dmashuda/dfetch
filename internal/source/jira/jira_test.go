@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -30,11 +29,11 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 }
 
 func eqFilter(col string, val any) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
+	return source.Filter{Column: col, Op: source.OpEq, Value: val}
 }
 
 func inFilter(col string, vals ...any) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpIn, Values: vals}
+	return source.Filter{Column: col, Op: source.OpIn, Values: vals}
 }
 
 // collectScan runs Scan and accumulates every emitted chunk into one Rows, so
@@ -391,7 +390,7 @@ func TestScanIssuesRangeFilterBlocksLimitPush(t *testing.T) {
 	limit := 2
 	req := source.ScanRequest{
 		Table:   "issues",
-		Filters: []source.Filter{{Column: "created", Op: sqlparse.OpGte, Value: "2024-06-01T00:00:00Z"}},
+		Filters: []source.Filter{{Column: "created", Op: source.OpGte, Value: "2024-06-01T00:00:00Z"}},
 		Limit:   &limit,
 	}
 	_, err := collectScan(c, req)

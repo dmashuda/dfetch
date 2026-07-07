@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +43,7 @@ func TestBuildJQLIn(t *testing.T) {
 
 func TestBuildJQLUnsupportedFilterNotConsumed(t *testing.T) {
 	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{
-		{Column: "summary", Op: sqlparse.OpLike, Value: "%foo%"},
+		{Column: "summary", Op: source.OpLike, Value: "%foo%"},
 	}})
 	assert.False(t, plan.ConsumedAll)
 	assert.Equal(t, defaultBoundClause, plan.JQL) // no restriction translated -> boundedness default
@@ -66,17 +65,17 @@ func TestBuildJQLBoundednessDefault(t *testing.T) {
 // "consumed" — ConsumedAll stays false so a LIMIT can't ride the search.
 func TestBuildJQLDateRangeRounding(t *testing.T) {
 	cases := map[string]struct {
-		op     sqlparse.Operator
+		op     source.Operator
 		value  any
 		values []any
 		want   string
 	}{
-		"gte exact minute":  {op: sqlparse.OpGte, value: "2024-01-01T10:00:00Z", want: `created >= "2023-12-31 10:00"`},
-		"gt truncates down": {op: sqlparse.OpGt, value: "2024-01-01T10:00:30Z", want: `created >= "2023-12-31 10:00"`},
-		"lte exact minute":  {op: sqlparse.OpLte, value: "2024-01-01T10:00:00Z", want: `created <= "2024-01-02 10:00"`},
-		"lt rounds up":      {op: sqlparse.OpLt, value: "2024-01-01T10:00:30Z", want: `created <= "2024-01-02 10:01"`},
-		"date-only lower":   {op: sqlparse.OpGte, value: "2024-01-01", want: `created >= "2023-12-31 00:00"`},
-		"space form lower":  {op: sqlparse.OpGte, value: "2024-01-01 10:00", want: `created >= "2023-12-31 10:00"`},
+		"gte exact minute":  {op: source.OpGte, value: "2024-01-01T10:00:00Z", want: `created >= "2023-12-31 10:00"`},
+		"gt truncates down": {op: source.OpGt, value: "2024-01-01T10:00:30Z", want: `created >= "2023-12-31 10:00"`},
+		"lte exact minute":  {op: source.OpLte, value: "2024-01-01T10:00:00Z", want: `created <= "2024-01-02 10:00"`},
+		"lt rounds up":      {op: source.OpLt, value: "2024-01-01T10:00:30Z", want: `created <= "2024-01-02 10:01"`},
+		"date-only lower":   {op: source.OpGte, value: "2024-01-01", want: `created >= "2023-12-31 00:00"`},
+		"space form lower":  {op: source.OpGte, value: "2024-01-01 10:00", want: `created >= "2023-12-31 10:00"`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -91,7 +90,7 @@ func TestBuildJQLDateRangeRounding(t *testing.T) {
 	// BETWEEN: low widened a day earlier and truncated down, high widened a day
 	// later and rounded up, both bounds present.
 	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{
-		{Column: "updated", Op: sqlparse.OpBetween, Values: []any{"2024-01-01T10:00:30Z", "2024-01-02T10:00:30Z"}},
+		{Column: "updated", Op: source.OpBetween, Values: []any{"2024-01-01T10:00:30Z", "2024-01-02T10:00:30Z"}},
 	}})
 	assert.Equal(t, `updated >= "2023-12-31 10:00" AND updated <= "2024-01-03 10:01"`, plan.JQL)
 	assert.False(t, plan.ConsumedAll)
@@ -101,8 +100,8 @@ func TestBuildJQLBothBoundsFromSeparateFilters(t *testing.T) {
 	// req.Filters (not req.Filter, which only returns the first) must be
 	// iterated so both a lower and upper bound on the same column are collected.
 	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{
-		{Column: "created", Op: sqlparse.OpGte, Value: "2024-01-01T00:00:00Z"},
-		{Column: "created", Op: sqlparse.OpLte, Value: "2024-01-31T00:00:00Z"},
+		{Column: "created", Op: source.OpGte, Value: "2024-01-01T00:00:00Z"},
+		{Column: "created", Op: source.OpLte, Value: "2024-01-31T00:00:00Z"},
 	}})
 	assert.Equal(t, `created >= "2023-12-31 00:00" AND created <= "2024-02-01 00:00"`, plan.JQL)
 	assert.False(t, plan.ConsumedAll)
@@ -124,7 +123,7 @@ func TestBuildJQLEmptyStringNotPushed(t *testing.T) {
 
 func TestBuildJQLUnparseableDateNotConsumed(t *testing.T) {
 	plan := buildJQL(source.ScanRequest{Filters: []source.Filter{
-		{Column: "created", Op: sqlparse.OpGte, Value: "not-a-date"},
+		{Column: "created", Op: source.OpGte, Value: "not-a-date"},
 	}})
 	assert.False(t, plan.ConsumedAll)
 	assert.Equal(t, defaultBoundClause, plan.JQL)

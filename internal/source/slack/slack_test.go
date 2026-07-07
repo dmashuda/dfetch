@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 }
 
 func eqFilter(col, val string) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: val}
+	return source.Filter{Column: col, Op: source.OpEq, Value: val}
 }
 
 // collectScan runs Scan and accumulates every emitted chunk into one Rows.
@@ -108,7 +107,7 @@ func TestScanChannelsExcludeArchivedPushDown(t *testing.T) {
 	})
 	_, err := collectScan(c, source.ScanRequest{
 		Table:   "channels",
-		Filters: []source.Filter{{Column: "is_archived", Op: sqlparse.OpEq, Value: int64(0)}},
+		Filters: []source.Filter{{Column: "is_archived", Op: source.OpEq, Value: int64(0)}},
 	})
 	require.NoError(t, err)
 	assert.Contains(t, gotQuery, "exclude_archived=true")
@@ -201,7 +200,7 @@ func TestScanMessagesTsRangePushDown(t *testing.T) {
 		Table: "messages",
 		Filters: []source.Filter{
 			eqFilter("channel", "C1"),
-			{Column: "ts", Op: sqlparse.OpBetween, Values: []any{"1600000000.0", "1600000100.0"}},
+			{Column: "ts", Op: source.OpBetween, Values: []any{"1600000000.0", "1600000100.0"}},
 		},
 	})
 	require.NoError(t, err)
@@ -494,7 +493,7 @@ func TestMessagesLimitPushedWithTsDesc(t *testing.T) {
 		Table: "messages",
 		Filters: []source.Filter{
 			eqFilter("channel", "C1"),
-			{Column: "ts", Op: sqlparse.OpGte, Value: int64(0)},
+			{Column: "ts", Op: source.OpGte, Value: int64(0)},
 		},
 		OrderBy: []source.OrderTerm{{Column: "ts", Desc: true}},
 		Limit:   intPtr(2),
@@ -521,8 +520,8 @@ func TestMessagesTsBothBoundsPushed(t *testing.T) {
 		Table: "messages",
 		Filters: []source.Filter{
 			eqFilter("channel", "C1"),
-			{Column: "ts", Op: sqlparse.OpGt, Value: "100.0"},
-			{Column: "ts", Op: sqlparse.OpLt, Value: "200.0"},
+			{Column: "ts", Op: source.OpGt, Value: "100.0"},
+			{Column: "ts", Op: source.OpLt, Value: "200.0"},
 		},
 	})
 	require.NoError(t, err)
@@ -551,7 +550,7 @@ func TestMessagesLimitNotPushed(t *testing.T) {
 			Table: "messages",
 			Filters: []source.Filter{
 				eqFilter("channel", "C1"),
-				{Column: "ts", Op: sqlparse.OpGt, Value: int64(0)},
+				{Column: "ts", Op: source.OpGt, Value: int64(0)},
 			},
 			Limit: intPtr(2),
 		},

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -197,7 +196,7 @@ func searchTerm(req source.ScanRequest) (any, error) {
 	if !ok {
 		return nil, nil
 	}
-	if f.Op != sqlparse.OpEq {
+	if f.Op != source.OpEq {
 		return nil, fmt.Errorf("ckan.%s: the q column supports only equality (q = '...')", req.Table)
 	}
 	s, ok := f.Value.(string)
@@ -209,7 +208,7 @@ func searchTerm(req source.ScanRequest) (any, error) {
 
 // eqString returns the string value of an equality filter, if it is one.
 func eqString(f source.Filter) (string, bool) {
-	if f.Op != sqlparse.OpEq {
+	if f.Op != source.OpEq {
 		return "", false
 	}
 	s, ok := f.Value.(string)
@@ -218,7 +217,7 @@ func eqString(f source.Filter) (string, bool) {
 
 // inStrings returns the solr-quoted members of an IN filter over string values.
 func inStrings(f source.Filter) ([]string, bool) {
-	if f.Op != sqlparse.OpIn || len(f.Values) == 0 {
+	if f.Op != source.OpIn || len(f.Values) == 0 {
 		return nil, false
 	}
 	out := make([]string, 0, len(f.Values))
@@ -249,15 +248,15 @@ func solrQuote(s string) string {
 // counts as consumed for LIMIT push (see buildDatasetParams).
 func solrRange(f source.Filter) (string, bool) {
 	switch f.Op {
-	case sqlparse.OpGt, sqlparse.OpGte:
+	case source.OpGt, source.OpGte:
 		if t, ok := parseTime(f.Value); ok {
 			return "[" + solrTimeFloor(t) + " TO *]", true
 		}
-	case sqlparse.OpLt, sqlparse.OpLte:
+	case source.OpLt, source.OpLte:
 		if t, ok := parseTime(f.Value); ok {
 			return "[* TO " + solrTimeCeil(t) + "]", true
 		}
-	case sqlparse.OpBetween:
+	case source.OpBetween:
 		if len(f.Values) == 2 {
 			lo, ok1 := parseTime(f.Values[0])
 			hi, ok2 := parseTime(f.Values[1])

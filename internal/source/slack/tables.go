@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 )
 
 func col(name, typ string) source.Column { return source.Column{Name: name, Type: typ} }
@@ -290,11 +289,11 @@ func tsBounds(req source.ScanRequest) (oldest, latest string) {
 			continue
 		}
 		switch f.Op {
-		case sqlparse.OpGt, sqlparse.OpGte:
+		case source.OpGt, source.OpGte:
 			oldest = asString(f.Value)
-		case sqlparse.OpLt, sqlparse.OpLte:
+		case source.OpLt, source.OpLte:
 			latest = asString(f.Value)
-		case sqlparse.OpBetween:
+		case source.OpBetween:
 			if len(f.Values) == 2 {
 				oldest = asString(f.Values[0])
 				latest = asString(f.Values[1])
@@ -315,12 +314,12 @@ func messagesLimitSafe(req source.ScanRequest) bool {
 	for _, f := range req.Filters {
 		switch f.Column {
 		case "channel":
-			if f.Op != sqlparse.OpEq {
+			if f.Op != source.OpEq {
 				return false
 			}
 		case "ts":
 			switch f.Op {
-			case sqlparse.OpGte, sqlparse.OpLte, sqlparse.OpBetween:
+			case source.OpGte, source.OpLte, source.OpBetween:
 			default:
 				return false
 			}
@@ -400,7 +399,7 @@ func searchLimitSafe(req source.ScanRequest) bool {
 		return false
 	}
 	for _, f := range req.Filters {
-		if f.Column != "query" || f.Op != sqlparse.OpEq {
+		if f.Column != "query" || f.Op != source.OpEq {
 			return false
 		}
 	}

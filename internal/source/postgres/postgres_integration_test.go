@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,7 +77,7 @@ func TestIntegrationDiscoverAndScan(t *testing.T) {
 	rows, err := collectScan(c, source.ScanRequest{
 		Table:   "dfetch_orders",
 		Columns: []string{"id", "created_at"},
-		Filters: []source.Filter{{Column: "status", Op: sqlparse.OpEq, Value: "paid"}},
+		Filters: []source.Filter{{Column: "status", Op: source.OpEq, Value: "paid"}},
 		OrderBy: []source.OrderTerm{{Column: "created_at", Desc: true}},
 		Limit:   &limit,
 	})

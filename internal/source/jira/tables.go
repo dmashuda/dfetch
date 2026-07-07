@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
@@ -340,7 +339,7 @@ func projectsLimitSafe(req source.ScanRequest, sortOK bool) bool {
 		return false
 	}
 	for _, f := range req.Filters {
-		if f.Column != "key" || (f.Op != sqlparse.OpEq && f.Op != sqlparse.OpIn) {
+		if f.Column != "key" || (f.Op != source.OpEq && f.Op != source.OpIn) {
 			return false
 		}
 	}

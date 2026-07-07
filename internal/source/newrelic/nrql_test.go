@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/dmashuda/dfetch/internal/source"
-	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +23,7 @@ var txCols = []source.Column{
 var txBools = map[string]bool{"error": true}
 
 func eqFilter(col string, v any) source.Filter {
-	return source.Filter{Column: col, Op: sqlparse.OpEq, Value: v}
+	return source.Filter{Column: col, Op: source.OpEq, Value: v}
 }
 
 func buildFor(req source.ScanRequest) nrqlPlan {
@@ -59,18 +58,18 @@ func TestTranslateNRQLFilter(t *testing.T) {
 	}{
 		{"string eq", eqFilter("appName", "billing"), "`appName` = 'billing'"},
 		{"string escape", eqFilter("appName", `bi'll\ing`), `` + "`appName`" + ` = 'bi\'ll\\ing'`},
-		{"not eq", source.Filter{Column: "appName", Op: sqlparse.OpNotEq, Value: "x"}, "`appName` != 'x'"},
-		{"numeric gt", source.Filter{Column: "duration", Op: sqlparse.OpGt, Value: float64(1.5)}, "`duration` > 1.5"},
-		{"numeric lte int", source.Filter{Column: "duration", Op: sqlparse.OpLte, Value: int64(3)}, "`duration` <= 3"},
-		{"string relational not pushed", source.Filter{Column: "appName", Op: sqlparse.OpGt, Value: "m"}, ""},
-		{"in list", source.Filter{Column: "appName", Op: sqlparse.OpIn, Values: []any{"a", "b"}}, "`appName` IN ('a', 'b')"},
-		{"not in", source.Filter{Column: "appName", Op: sqlparse.OpNotIn, Values: []any{"a"}}, "`appName` NOT IN ('a')"},
-		{"empty in not pushed", source.Filter{Column: "appName", Op: sqlparse.OpIn}, ""},
-		{"between numeric", source.Filter{Column: "duration", Op: sqlparse.OpBetween, Values: []any{int64(1), int64(2)}}, "(`duration` >= 1 AND `duration` <= 2)"},
-		{"between string not pushed", source.Filter{Column: "appName", Op: sqlparse.OpBetween, Values: []any{"a", "b"}}, ""},
-		{"not between not pushed", source.Filter{Column: "duration", Op: sqlparse.OpNotBetween, Values: []any{int64(1), int64(2)}}, ""},
-		{"like not pushed (case-insensitive in NRQL)", source.Filter{Column: "appName", Op: sqlparse.OpLike, Value: "bill%"}, ""},
-		{"glob not pushed", source.Filter{Column: "appName", Op: sqlparse.OpGlob, Value: "b*"}, ""},
+		{"not eq", source.Filter{Column: "appName", Op: source.OpNotEq, Value: "x"}, "`appName` != 'x'"},
+		{"numeric gt", source.Filter{Column: "duration", Op: source.OpGt, Value: float64(1.5)}, "`duration` > 1.5"},
+		{"numeric lte int", source.Filter{Column: "duration", Op: source.OpLte, Value: int64(3)}, "`duration` <= 3"},
+		{"string relational not pushed", source.Filter{Column: "appName", Op: source.OpGt, Value: "m"}, ""},
+		{"in list", source.Filter{Column: "appName", Op: source.OpIn, Values: []any{"a", "b"}}, "`appName` IN ('a', 'b')"},
+		{"not in", source.Filter{Column: "appName", Op: source.OpNotIn, Values: []any{"a"}}, "`appName` NOT IN ('a')"},
+		{"empty in not pushed", source.Filter{Column: "appName", Op: source.OpIn}, ""},
+		{"between numeric", source.Filter{Column: "duration", Op: source.OpBetween, Values: []any{int64(1), int64(2)}}, "(`duration` >= 1 AND `duration` <= 2)"},
+		{"between string not pushed", source.Filter{Column: "appName", Op: source.OpBetween, Values: []any{"a", "b"}}, ""},
+		{"not between not pushed", source.Filter{Column: "duration", Op: source.OpNotBetween, Values: []any{int64(1), int64(2)}}, ""},
+		{"like not pushed (case-insensitive in NRQL)", source.Filter{Column: "appName", Op: source.OpLike, Value: "bill%"}, ""},
+		{"glob not pushed", source.Filter{Column: "appName", Op: source.OpGlob, Value: "b*"}, ""},
 		{"bool eq 1", eqFilter("error", int64(1)), "`error` = true"},
 		{"bool eq 0", eqFilter("error", int64(0)), "`error` = false"},
 		{"bool eq other not pushed", eqFilter("error", int64(2)), ""},
@@ -95,7 +94,7 @@ func TestTranslateNRQLFilter(t *testing.T) {
 func TestBuildNRQLTimestamp(t *testing.T) {
 	t.Run("lower bound", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(1750000000000)},
+			{Column: "timestamp", Op: source.OpGte, Value: int64(1750000000000)},
 		}})
 		assert.Contains(t, plan.NRQL, "WHERE `timestamp` >= 1750000000000")
 		assert.Contains(t, plan.NRQL, "SINCE 1749999999999")
@@ -105,7 +104,7 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 
 	t.Run("between widens both sides", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpBetween, Values: []any{int64(100), int64(200)}},
+			{Column: "timestamp", Op: source.OpBetween, Values: []any{int64(100), int64(200)}},
 		}})
 		assert.Contains(t, plan.NRQL, "WHERE (`timestamp` >= 100 AND `timestamp` <= 200)")
 		assert.Contains(t, plan.NRQL, "SINCE 99 UNTIL 201")
@@ -114,7 +113,7 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 	t.Run("upper bound only anchors the window to it", func(t *testing.T) {
 		upper := int64(1000000000000) // long before testNow: a now-anchored SINCE would invert
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpLt, Value: upper},
+			{Column: "timestamp", Op: source.OpLt, Value: upper},
 		}})
 		assert.Contains(t, plan.NRQL, "SINCE 999996400001 UNTIL 1000000000001") // until - 1h
 		assert.True(t, plan.Windowed)                                           // still warn: history is windowed
@@ -129,7 +128,7 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 
 	t.Run("IN bounds the window by its min and max", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpIn, Values: []any{int64(300), int64(100), int64(200)}},
+			{Column: "timestamp", Op: source.OpIn, Values: []any{int64(300), int64(100), int64(200)}},
 		}})
 		assert.Contains(t, plan.NRQL, "WHERE `timestamp` IN (300, 100, 200)")
 		assert.Contains(t, plan.NRQL, "SINCE 99 UNTIL 301") // not the inverted 299..101
@@ -138,14 +137,14 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 
 	t.Run("IN with an unparseable value bounds nothing", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpIn, Values: []any{int64(100), "oops"}},
+			{Column: "timestamp", Op: source.OpIn, Values: []any{int64(100), "oops"}},
 		}})
 		assert.True(t, plan.Windowed) // default window, no partial bounds
 	})
 
 	t.Run("fractional bound is floored, not dropped", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpGt, Value: float64(1750000000000.5)},
+			{Column: "timestamp", Op: source.OpGt, Value: float64(1750000000000.5)},
 		}})
 		assert.Contains(t, plan.NRQL, "WHERE `timestamp` > 1750000000000.5")
 		// floor-1: still below the bound, so the window stays a superset of the
@@ -156,9 +155,9 @@ func TestBuildNRQLTimestamp(t *testing.T) {
 
 	t.Run("conjunction takes the tightest bounds", func(t *testing.T) {
 		plan := buildFor(source.ScanRequest{Filters: []source.Filter{
-			{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(100)},
-			{Column: "timestamp", Op: sqlparse.OpGte, Value: int64(300)},
-			{Column: "timestamp", Op: sqlparse.OpLte, Value: int64(900)},
+			{Column: "timestamp", Op: source.OpGte, Value: int64(100)},
+			{Column: "timestamp", Op: source.OpGte, Value: int64(300)},
+			{Column: "timestamp", Op: source.OpLte, Value: int64(900)},
 		}})
 		assert.Contains(t, plan.NRQL, "SINCE 299 UNTIL 901")
 	})
@@ -197,7 +196,7 @@ func TestBuildNRQLOrderLimit(t *testing.T) {
 
 	t.Run("unconsumed filter blocks the push", func(t *testing.T) {
 		req := base
-		req.Filters = append(req.Filters, source.Filter{Column: "appName", Op: sqlparse.OpLike, Value: "b%"})
+		req.Filters = append(req.Filters, source.Filter{Column: "appName", Op: source.OpLike, Value: "b%"})
 		plan := buildFor(req)
 		assert.Contains(t, plan.NRQL, "LIMIT 5000")
 		assert.True(t, plan.Capped)
