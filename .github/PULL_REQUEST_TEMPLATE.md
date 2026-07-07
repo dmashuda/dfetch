@@ -15,4 +15,4 @@
 - [ ] `make coverage` passes
 - [ ] README/connector examples updated if behavior changed (`make examples-check`)
 - [ ] Docs updated (README / `connectors.md` / `CONTRIBUTING.md`) if relevant
-- [ ] For a new connector: followed [`internal/source/README.md`](../internal/source/README.md)
+- [ ] For a new connector: followed [`source/README.md`](../source/README.md)

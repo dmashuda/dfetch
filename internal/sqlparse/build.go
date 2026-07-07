@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/antlr4-go/antlr/v4"
-	"github.com/dmashuda/dfetch/internal/source"
 	"github.com/dmashuda/dfetch/internal/sqlparse/gen"
+	"github.com/dmashuda/dfetch/source"
 )
 
 // buildSelect translates a parsed select_stmt into dfetch's typed AST. Only the

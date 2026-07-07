@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dmashuda/dfetch/internal/source"
+	"github.com/dmashuda/dfetch/source"
 )
 
 // This file renders the typed AST back into SQL text. It reproduces the modeled

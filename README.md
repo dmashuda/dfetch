@@ -223,7 +223,7 @@ Stages 1, 2, and 4 are serial; stage 3 fans out. Each source is planned into a
 push-down `ScanRequest`, scanned by its connector (which streams one chunk per API
 page through `emit`), and loaded into the local DB as each chunk arrives —
 serialized by a mutex onto the single pinned connection. The first error cancels
-the whole group. See the orchestration in `internal/engine/engine.go`.
+the whole group. See the orchestration in `engine/engine.go`.
 
 ## Contributing
 

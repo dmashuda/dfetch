@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/dmashuda/dfetch/internal/source"
+	"github.com/dmashuda/dfetch/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

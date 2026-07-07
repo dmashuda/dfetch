@@ -1,6 +1,6 @@
 package sqlparse
 
-import "github.com/dmashuda/dfetch/internal/source"
+import "github.com/dmashuda/dfetch/source"
 
 // This file defines dfetch's own typed representation of a parsed SELECT query.
 // It is a pragmatic, push-down-oriented model rather than a faithful copy of the

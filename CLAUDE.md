@@ -12,21 +12,21 @@ into a per-request local SQLite database, and resolves the query against it.
 
 ```
 cmd/                    cobra CLI: root, query, tables, version
-internal/config         YAML config loading (schema -> connector; saved queries)
+config                  YAML config loading (schema -> connector; saved queries)
                         loaded from ./dfetch.yaml, then $XDG_CONFIG_HOME/dfetch/dfetch.yaml, then ~/dfetch.yaml
-internal/source         Connector interface + ScanRequest (push-down) + registry
-                        (see internal/source/README.md to add a new connector)
-internal/source/github  GitHub connector (issues/pulls/repos/commits/releases/workflow_runs/artifacts), stdlib net/http
-internal/source/jaeger  Jaeger connector (spans/services/operations), api_v3
-internal/source/ckan    CKAN/data.gov connector (datasets/resources/organizations/groups), Action API
-internal/source/docker  Docker connector (containers/images/volumes/networks), Engine API over the local unix socket, stdlib net/http
-internal/source/slack   Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_command (full Cookie header, verbatim)
-internal/source/newrelic New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
-internal/source/postgres Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
-internal/source/jira    Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_command (full header, verbatim)
+source                  Connector interface + ScanRequest (push-down) + registry
+                        (see source/README.md to add a new connector)
+source/github           GitHub connector (issues/pulls/repos/commits/releases/workflow_runs/artifacts), stdlib net/http
+source/jaeger           Jaeger connector (spans/services/operations), api_v3
+source/ckan             CKAN/data.gov connector (datasets/resources/organizations/groups), Action API
+source/docker           Docker connector (containers/images/volumes/networks), Engine API over the local unix socket, stdlib net/http
+source/slack            Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_command (full Cookie header, verbatim)
+source/newrelic         New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
+source/postgres         Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
+source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_command (full header, verbatim)
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
-internal/localdb        per-request local SQLite database (mattn/go-sqlite3, cgo)
-internal/engine         orchestration: parse -> plan push-down -> load -> resolve
+localdb                 per-request local SQLite database (mattn/go-sqlite3, cgo)
+engine                  orchestration: parse -> plan push-down -> load -> resolve
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 internal/examples       render/check connectors.md examples from examples.yaml (tested)
 tools/examples          dev CLI behind `make examples`/`examples-check`/`examples-test`
@@ -46,7 +46,7 @@ mutex onto localdb's single pinned connection. LIMIT is pushed to a source
 when it's single-source, or when it's the driving source of a join the LIMIT can
 safely ride (ordering entirely on it, and the join can't drop its rows — every
 other source pinned to constants, or a leftmost source with only LEFT/CROSS
-joins); see `limitSafeForJoin` in `internal/engine/plan.go`. The connector
+joins); see `limitSafeForJoin` in `engine/plan.go`. The connector
 additionally refuses to push unless it consumed every filter and honored the
 order.
 
@@ -55,7 +55,7 @@ warehouse) instead returns an empty `Tables()` and implements the optional
 `source.SchemaDescriber` / `source.TableLister` interfaces; the engine resolves a
 referenced table's columns on demand (`resolveTable` prefers `DescribeTable`) and
 `dfetch tables` browses tiered (schemas+counts → names → columns). See the
-"Dynamic sources" section of `internal/source/README.md`.
+"Dynamic sources" section of `source/README.md`.
 
 ## Debugging with traces
 
