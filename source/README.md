@@ -93,9 +93,9 @@ func (r ScanRequest) Filter(column string) (Filter, bool) // first filter on col
 
 type Filter struct {
     Column string
-    Op     sqlparse.Operator // OpEq, OpGt, OpBetween, OpIn, … (see below)
-    Value  any               // single-value ops: string/int64/float64/bool/[]byte/nil
-    Values []any             // IN list, or [low, high] for BETWEEN
+    Op     Operator // OpEq, OpGt, OpBetween, OpIn, … (see below)
+    Value  any      // single-value ops: string/int64/float64/bool/[]byte/nil
+    Values []any    // IN list, or [low, high] for BETWEEN
 }
 
 type OrderTerm struct {
@@ -223,7 +223,7 @@ columns is free.
 - **Limit/Offset** only when this source drives the result (single-source query,
   or a join where the LIMIT can safely ride the driving source).
 
-**Operators** (`sqlparse.Operator`, see `internal/sqlparse/ast.go`): `OpEq`,
+**Operators** (`source.Operator`, see `source/operator.go`): `OpEq`,
 `OpNotEq`, `OpLt`, `OpLte`, `OpGt`, `OpGte`, `OpLike`/`OpNotLike`,
 `OpGlob`/`OpNotGlob`, `OpRegexp`/`OpNotRegexp`, `OpMatch`/`OpNotMatch`,
 `OpIs`/`OpIsNot`/`OpIsDistinctFrom`/`OpIsNotDistinctFrom`,
@@ -267,16 +267,21 @@ streaming reduces peak memory and overlaps network with local inserts.
 
 ## Registration and configuration
 
-Two independent ways a connector becomes available:
+The engine itself carries no connectors; dfetch's default set lives in the
+`connectors` package, and the CLI wires it up with `connectors.DefaultOptions()`
+plus the user's config. Three independent ways a connector becomes available:
 
-**Builtin** — available with no config, under a fixed schema name. Add it to the
-`builtins` map in `engine/engine.go` (and import the package):
+**Builtin** — available with no config, under a fixed schema name. Add it to
+`Builtins()` in `connectors/connectors.go` (or `ConfigOnly()` if it cannot
+construct without params, e.g. a database DSN):
 
 ```go
-var builtins = map[string]source.Factory{
-    "github": github.New,
-    "jaeger": jaeger.New,
-    "<name>": myconnector.New, // now queryable as <name>.<table>
+func Builtins() map[string]source.Factory {
+    return map[string]source.Factory{
+        "github": github.New,
+        "jaeger": jaeger.New,
+        "<name>": myconnector.New, // now queryable as <name>.<table>
+    }
 }
 ```
 
@@ -296,8 +301,14 @@ sources:
       base_url: https://github.example.com/api/v3
 ```
 
-`engine.New` registers the builtins, then builds each config source via the
-registry and stores it under its `name` (config wins on conflicts).
+The CLI registers the default set first, then each config source, and the last
+registration of a schema name wins — so config overrides a builtin.
+
+**Library** — an external Go program never touches this repo: it implements
+`source.Connector` and registers an instance directly with
+`engine.WithConnector("name", conn)`, or registers a `source.Factory` in its own
+`source.Registry` and declares typed sources via `engine.WithSources`/
+`engine.WithConfig`. See the "Use as a library" section of the root README.
 
 **Params and secrets:** read structured options from `params` (type-assert, e.g.
 `params["base_url"].(string)`); read secrets/tokens from the environment, not
@@ -399,7 +410,8 @@ auto-instantiated), so it has no `base_url`-style builtin default.
    `*source.Rows` per page with values in column order.
 4. **Add push-down helpers** as needed (equality extraction, range→window,
    order/limit mapping) — copy github/jaeger patterns; only push what's safe.
-5. **Register** in `engine.go` `builtins` (and/or document config usage).
+5. **Register** in `connectors/connectors.go` — `Builtins()` for a
+   works-with-`nil`-params connector, `ConfigOnly()` otherwise.
 6. **Test** with `httptest` + testify (see [Testing](#testing)).
 7. **Document**: add the connector to [connectors.md](../../connectors.md) (and an
    example group in `examples.yaml`, rendered via `make examples`), and a layout
@@ -412,7 +424,7 @@ auto-instantiated), so it has no `base_url`-style builtin default.
 - [ ] Columns use SQLite affinities; rows match column count/order; `nil`/`int64`/`bool` used correctly
 - [ ] Push-down only when safe; required filters error; unbounded scans capped
 - [ ] One chunk emitted per page; `ctx` threaded; `emit` errors propagated
-- [ ] Registered in `engine.go` `builtins` (or documented config usage)
+- [ ] Registered in `connectors/connectors.go` (`Builtins()` or `ConfigOnly()`)
 - [ ] Tests (httptest + testify) cover tables, scan, push-down, errors; `make coverage` passes
 - [ ] `make lint` and `make vet` clean
 - [ ] README Connectors section + CONTRIBUTING layout updated

@@ -225,6 +225,71 @@ page through `emit`), and loaded into the local DB as each chunk arrives —
 serialized by a mutex onto the single pinned connection. The first error cancels
 the whole group. See the orchestration in `engine/engine.go`.
 
+## Use as a library
+
+dfetch is importable as a Go module: the CLI is a thin wrapper over the same
+public packages. `engine.New` takes functional options, carries **no default
+connectors**, and every piece is swappable:
+
+```go
+import (
+    "github.com/dmashuda/dfetch/engine"
+    "github.com/dmashuda/dfetch/source"
+)
+
+// Your own data source: implement source.Connector (Tables + Scan) and
+// register it under a schema name.
+eng, err := engine.New(engine.WithConnector("mydata", myConn))
+res, err := eng.Run(ctx, `SELECT * FROM mydata.items WHERE state = 'open'`)
+```
+
+**The stock connector set** lives in the `connectors` package (importing
+`engine` alone doesn't link pgx or any API client). This reproduces the CLI's
+setup:
+
+```go
+import "github.com/dmashuda/dfetch/connectors"
+
+opts, err := connectors.DefaultOptions() // builtins + default registry
+eng, err := engine.New(append(opts, engine.WithConnector("mydata", myConn))...)
+```
+
+**Config without YAML files** — `config.Config` is plain data, so build it in
+code (or load it with `config.Load`) and pass it with `engine.WithConfig`;
+typed sources are built through the registry from `engine.WithRegistry`:
+
+```go
+eng, err := engine.New(
+    engine.WithRegistry(connectors.DefaultRegistry()),
+    engine.WithSources(config.SourceConfig{
+        Name:   "warehouse",
+        Type:   "postgres",
+        Params: map[string]any{"dsn": dsn, "schemas": []string{"public"}},
+    }),
+)
+```
+
+Options apply in order and the last registration of a schema name wins, which
+is how config overrides a builtin.
+
+**Custom SQLite management** — the engine drives the per-request database
+through the `engine.DB` interface (`Attach`, `CreateTable`, `Insert`, `Query`,
+`Close`) and opens one per run via `engine.WithDB`. The default is `localdb`
+(temp files, removed on close); supply your own opener to control file
+placement, caching, or lifecycle:
+
+```go
+eng, err := engine.New(
+    engine.WithConnector("mydata", myConn),
+    engine.WithDB(func(ctx context.Context) (engine.DB, error) {
+        return myDBManager.Open(ctx) // must implement engine.DB
+    }),
+)
+```
+
+Tracing works the same as the CLI: spans go to the global OpenTelemetry tracer
+provider, a no-op unless your program installs one.
+
 ## Contributing
 
 Building from source, running the tests, and **writing a new connector** are

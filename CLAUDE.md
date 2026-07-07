@@ -12,6 +12,7 @@ into a per-request local SQLite database, and resolves the query against it.
 
 ```
 cmd/                    cobra CLI: root, query, tables, version
+                        (cmd/engine.go wires connectors.DefaultOptions + config into engine.New)
 config                  YAML config loading (schema -> connector; saved queries)
                         loaded from ./dfetch.yaml, then $XDG_CONFIG_HOME/dfetch/dfetch.yaml, then ~/dfetch.yaml
 source                  Connector interface + ScanRequest (push-down) + registry
@@ -24,13 +25,25 @@ source/slack            Slack connector (channels/users/messages/search), Web AP
 source/newrelic         New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
 source/postgres         Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
 source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_command (full header, verbatim)
+connectors              default connector set (Builtins/ConfigOnly/DefaultRegistry/DefaultOptions); engine never imports it
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
-localdb                 per-request local SQLite database (mattn/go-sqlite3, cgo)
-engine                  orchestration: parse -> plan push-down -> load -> resolve
+localdb                 per-request local SQLite database (mattn/go-sqlite3, cgo); default engine.DB implementation
+engine                  orchestration: parse -> plan push-down -> load -> resolve; functional-options New (WithConnector/WithSources/WithConfig/WithRegistry/WithDB)
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 internal/examples       render/check connectors.md examples from examples.yaml (tested)
 tools/examples          dev CLI behind `make examples`/`examples-check`/`examples-test`
 ```
+
+## Library vs. CLI
+
+Everything outside `internal/` is public library API: `engine` (options-based
+`New`, the `DB` interface for custom SQLite management), `source` (the
+`Connector` contract + `Operator` enum), `config` (programmatic or YAML), and
+`localdb` (the default `engine.DB`). The engine has **no default connectors**;
+the `connectors` package holds dfetch's stock set, and the CLI composes
+`connectors.DefaultOptions()` + `engine.WithConfig(cfg)` in `cmd/engine.go`.
+Adding a builtin means editing `connectors/connectors.go`, not the engine. See
+the "Use as a library" section of README.md.
 
 ## How a query runs
 

@@ -98,19 +98,20 @@ generator/runner live in [`tools/examples`](tools/examples) over the tested
 
 ```
 cmd/                    cobra CLI: root, query, tables, version
-config         YAML config loading (schema -> connector)
-source         Connector interface + ScanRequest (push-down) + registry
-source/github  GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
-source/jaeger  Jaeger connector (spans, services, operations)
-source/ckan    CKAN/data.gov connector (datasets, resources, organizations, groups)
-source/docker  Docker connector (containers, images, volumes, networks), local unix socket
-source/slack   Slack connector (channels, users, messages, search), Web API
-source/newrelic New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
-source/postgres Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
-source/jira    Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only via `type: jira`
+config                  YAML config loading (schema -> connector)
+source                  Connector interface + ScanRequest (push-down) + registry + Operator enum
+source/github           GitHub connector (issues, pulls, repos, commits, releases, workflow_runs, artifacts)
+source/jaeger           Jaeger connector (spans, services, operations)
+source/ckan             CKAN/data.gov connector (datasets, resources, organizations, groups)
+source/docker           Docker connector (containers, images, volumes, networks), local unix socket
+source/slack            Slack connector (channels, users, messages, search), Web API
+source/newrelic         New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
+source/postgres         Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`
+source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only via `type: jira`
+connectors              default connector set (Builtins/ConfigOnly/DefaultRegistry/DefaultOptions)
 internal/sqlparse       SQL parse/validate + typed AST (ORDER BY/LIMIT) + SQL rendering
-localdb        per-request local SQLite database (attach/create/insert/query)
-engine         orchestration: parse -> plan push-down -> load -> resolve
+localdb                 per-request local SQLite database (attach/create/insert/query); default engine.DB
+engine                  orchestration: parse -> plan push-down -> load -> resolve; options-based New
 internal/telemetry      OpenTelemetry setup (env-gated; no-op when off)
 internal/examples       render/check README query examples from examples.yaml
 tools/examples          dev CLI: gen/check/run the examples (make examples*)
