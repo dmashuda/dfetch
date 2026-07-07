@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dmashuda/dfetch/config"
 	"github.com/dmashuda/dfetch/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,7 +81,7 @@ func TestRunPushesJoinLimitToDrivingSource(t *testing.T) {
 }
 
 func engineWith(conns map[string]source.Connector) *Engine {
-	return &Engine{connectors: conns}
+	return &Engine{connectors: conns, openDB: defaultOpenDB}
 }
 
 // TestRunWithParamsBindsNamedParam end-to-ends a saved-query bind: a :title
@@ -195,11 +194,4 @@ func TestRunUnknownTable(t *testing.T) {
 	_, err := e.Run(context.Background(), "SELECT * FROM github.pulls WHERE owner='x' AND repo='y'")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no table")
-}
-
-func TestNewBuiltinGithub(t *testing.T) {
-	e, err := New(&config.Config{})
-	require.NoError(t, err)
-	_, ok := e.connectors["github"]
-	assert.True(t, ok)
 }

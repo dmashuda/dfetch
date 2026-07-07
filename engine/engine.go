@@ -12,19 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dmashuda/dfetch/config"
 	"github.com/dmashuda/dfetch/internal/sqlparse"
 	"github.com/dmashuda/dfetch/internal/telemetry"
-	"github.com/dmashuda/dfetch/localdb"
 	"github.com/dmashuda/dfetch/source"
-	"github.com/dmashuda/dfetch/source/ckan"
-	"github.com/dmashuda/dfetch/source/docker"
-	"github.com/dmashuda/dfetch/source/github"
-	"github.com/dmashuda/dfetch/source/jaeger"
-	"github.com/dmashuda/dfetch/source/jira"
-	"github.com/dmashuda/dfetch/source/newrelic"
-	"github.com/dmashuda/dfetch/source/postgres"
-	"github.com/dmashuda/dfetch/source/slack"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
@@ -36,54 +26,37 @@ import (
 // schema they serve (e.g. "github").
 type Engine struct {
 	connectors map[string]source.Connector
+	openDB     OpenDBFunc
 }
 
-// builtins are connector types available without configuration. Each is also
-// auto-instantiated under its own name as a schema (so New(nil) must work).
-var builtins = map[string]source.Factory{
-	"datagov": ckan.New,
-	"docker":  docker.New,
-	"github":  github.New,
-	"jaeger":  jaeger.New,
-	"slack":   slack.New,
-}
-
-// connectorTypes are registered for use via config (`type: <name>`) but are NOT
-// auto-instantiated, because they need params to construct (e.g. a Postgres DSN).
-var connectorTypes = map[string]source.Factory{
-	"jira":     jira.New,
-	"newrelic": newrelic.New,
-	"postgres": postgres.New,
-}
-
-// New builds an Engine: the built-in connectors plus any declared in config.
-func New(cfg *config.Config) (*Engine, error) {
-	registry := source.NewRegistry()
-	for typeName, factory := range builtins {
-		registry.Register(typeName, factory)
-	}
-	for typeName, factory := range connectorTypes {
-		registry.Register(typeName, factory)
+// New builds an Engine from the given options. Options apply in order, and the
+// last registration of a schema name wins — so registering the default set
+// first and a config's sources after lets config override a built-in schema.
+//
+// New carries no default connectors: the connectors package provides dfetch's
+// built-in set (connectors.DefaultOptions). An engine with no connectors is
+// valid; every query then fails with "no connector for schema". Typed sources
+// (WithSources/WithConfig) are built at New time via the WithRegistry registry.
+func New(opts ...Option) (*Engine, error) {
+	s := settings{registry: source.NewRegistry(), openDB: defaultOpenDB}
+	for _, o := range opts {
+		o(&s)
 	}
 
 	connectors := make(map[string]source.Connector)
-	for typeName, factory := range builtins {
-		c, err := factory(nil)
-		if err != nil {
-			return nil, fmt.Errorf("initializing built-in connector %q: %w", typeName, err)
+	for _, op := range s.ops {
+		if op.conn != nil {
+			connectors[op.name] = op.conn
+			continue
 		}
-		connectors[typeName] = c
+		c, err := s.registry.Build(op.src.Type, op.src.Params)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: %w", op.src.Name, err)
+		}
+		connectors[op.src.Name] = c
 	}
 
-	for _, sc := range cfg.Sources {
-		c, err := registry.Build(sc.Type, sc.Params)
-		if err != nil {
-			return nil, fmt.Errorf("connector %q: %w", sc.Name, err)
-		}
-		connectors[sc.Name] = c // config can override or add schemas
-	}
-
-	return &Engine{connectors: connectors}, nil
+	return &Engine{connectors: connectors, openDB: s.openDB}, nil
 }
 
 // SchemaSummary is one schema's entry in the top-level `dfetch tables` listing.
@@ -174,7 +147,7 @@ func (e *Engine) RunWithParams(ctx context.Context, query string, params map[str
 		return nil, recordErr(span, fmt.Errorf("parsing SQL: %w", err))
 	}
 
-	db, err := localdb.Open(ctx)
+	db, err := e.openDB(ctx)
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("opening local database: %w", err))
 	}
@@ -294,9 +267,10 @@ func (e *Engine) resolveSources(ctx context.Context, sources []sqlparse.Source) 
 
 // streamSources scans every source concurrently and loads each emitted chunk
 // into the local database as it arrives. Chunk inserts are serialized with mu
-// because localdb runs on a single pinned connection. The first error cancels the
-// remaining scans.
-func (e *Engine) streamSources(ctx context.Context, db *localdb.DB, stmt *sqlparse.Select, resolved []resolvedSource, params map[string]any) ([]string, error) {
+// because the DB is not required to be safe for concurrent writes (localdb
+// runs on a single pinned connection). The first error cancels the remaining
+// scans.
+func (e *Engine) streamSources(ctx context.Context, db DB, stmt *sqlparse.Select, resolved []resolvedSource, params map[string]any) ([]string, error) {
 	var mu sync.Mutex
 	var warnings []string
 	g, gctx := errgroup.WithContext(ctx)

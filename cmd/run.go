@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/dmashuda/dfetch/config"
-	"github.com/dmashuda/dfetch/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +46,7 @@ return every column the query produces. Use 'dfetch queries' to list saved queri
 			params[p] = values[i]
 		}
 
-		eng, err := engine.New(cfg)
+		eng, err := newEngine(cfg)
 		if err != nil {
 			return fmt.Errorf("initializing engine: %w", err)
 		}
