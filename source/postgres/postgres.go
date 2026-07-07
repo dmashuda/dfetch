@@ -34,12 +34,13 @@ type Connector struct {
 	schema  string
 	maxRows int
 
-	// The pool opens lazily on first use (dbOnce): the DSN may come from a
+	// The pool opens lazily on first use: the DSN may come from a
 	// dsn_func/dsn_command that must not run for queries that never touch this
 	// source, and a misconfigured source shouldn't fail unrelated commands.
-	dbOnce sync.Once
-	db     *sql.DB
-	dbErr  error
+	// Only a successful open is cached (guarded by dbMu) — a transient DSN or
+	// open failure is returned to that caller and retried on the next use.
+	dbMu sync.Mutex
+	db   *sql.DB
 
 	// colCache memoizes information_schema.columns lookups so a single query
 	// doesn't pay two round-trips (the engine's DescribeTable at planning time
@@ -67,48 +68,37 @@ func New(params map[string]any) (source.Connector, error) {
 	if s, ok := params["schema"].(string); ok && s != "" {
 		c.schema = s
 	}
-	if n, ok := intParam(params["max_rows"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["max_rows"]); ok && n > 0 {
 		c.maxRows = n
 	}
 	return c, nil
 }
 
-// getDB resolves the DSN and opens the pool once, on first use.
+// getDB resolves the DSN and opens the pool on first successful use; only
+// success is cached, so a transient failure doesn't disable the source for
+// the process lifetime.
 func (c *Connector) getDB(ctx context.Context) (*sql.DB, error) {
-	c.dbOnce.Do(func() {
-		dsn, err := c.dsn.Get(ctx)
-		if err != nil {
-			c.dbErr = err
-			return
-		}
-		if dsn == "" {
-			c.dbErr = fmt.Errorf("postgres: no DSN configured; set params.dsn, $DFETCH_POSTGRES_DSN, params.dsn_func, or params.dsn_command")
-			return
-		}
-		// otelsql wraps the pgx driver so each statement becomes a span (a no-op
-		// until a tracer provider is installed) — same as localdb.
-		db, err := otelsql.Open("pgx", dsn,
-			otelsql.WithAttributes(semconv.DBSystemNameKey.String("postgresql")))
-		if err != nil {
-			c.dbErr = fmt.Errorf("postgres: opening database: %w", err)
-			return
-		}
-		c.db = db
-	})
-	return c.db, c.dbErr
-}
-
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
+	c.dbMu.Lock()
+	defer c.dbMu.Unlock()
+	if c.db != nil {
+		return c.db, nil
 	}
+	dsn, err := c.dsn.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dsn == "" {
+		return nil, fmt.Errorf("postgres: no DSN configured; set params.dsn, $DFETCH_POSTGRES_DSN, params.dsn_func, or params.dsn_command")
+	}
+	// otelsql wraps the pgx driver so each statement becomes a span (a no-op
+	// until a tracer provider is installed) — same as localdb.
+	db, err := otelsql.Open("pgx", dsn,
+		otelsql.WithAttributes(semconv.DBSystemNameKey.String("postgresql")))
+	if err != nil {
+		return nil, fmt.Errorf("postgres: opening database: %w", err)
+	}
+	c.db = db
+	return c.db, nil
 }
 
 // Tables returns nil: tables are discovered on demand (ListTables/DescribeTable).

@@ -71,25 +71,10 @@ func New(params map[string]any) (source.Connector, error) {
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
-	if n, ok := intParam(params["max_traces"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["max_traces"]); ok && n > 0 {
 		c.maxTraces = n
 	}
 	return c, nil
-}
-
-// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
-// int64, or float64).
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
 }
 
 // Tables returns the schemas of the jaeger.* tables.

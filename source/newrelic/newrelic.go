@@ -84,7 +84,7 @@ type tableInfo struct {
 // "nrql_timeout" (seconds, default 70, max 120). It is config-only —
 // registered for `type: newrelic`, never auto-instantiated.
 func New(params map[string]any) (source.Connector, error) {
-	account, ok := intParam(params["account_id"])
+	account, ok := source.IntParam(params["account_id"])
 	if !ok || account <= 0 {
 		return nil, fmt.Errorf("newrelic: params.account_id is required (your New Relic account id)")
 	}
@@ -113,31 +113,16 @@ func New(params map[string]any) (source.Connector, error) {
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
-	if n, ok := intParam(params["max_rows"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["max_rows"]); ok && n > 0 {
 		c.maxRows = min(n, nrqlHardCap)
 	}
-	if n, ok := intParam(params["nrql_timeout"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["nrql_timeout"]); ok && n > 0 {
 		c.nrqlTimeout = min(n, 120)
 	}
 	// The HTTP timeout must outlast the server-side NRQL timeout, or a slow
 	// query gets killed client-side before NerdGraph can answer.
 	c.client.Timeout = time.Duration(c.nrqlTimeout+30) * time.Second
 	return c, nil
-}
-
-// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
-// int64, or float64).
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
 }
 
 // --- GraphQL client ---

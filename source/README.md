@@ -324,8 +324,9 @@ connector the full standard trio with fixed precedence: a static param (when
 you name one), else the environment, else `params["token_func"]` (a Go
 function, programmatic config only), else `params["token_command"]` (an argv
 run without a shell, 5s timeout). Resolution is lazy (never at construction —
-connectors are built eagerly for every query), happens exactly once, and is
-race-safe under concurrent Scans. When the env value needs shaping (a
+connectors are built eagerly for every query), resolves once on success — a failure is
+returned without being cached, so the next use retries — and is race-safe
+under concurrent Scans. When the env value needs shaping (a
 `"Bearer "` prefix, a Basic pair), pass your own closure instead of `EnvFirst`
 — see slack/jira. Always accept a `base_url`-style override — it's what lets
 tests point at a local `httptest` server.

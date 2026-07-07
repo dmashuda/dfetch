@@ -295,8 +295,8 @@ eng, err := engine.New(
 )
 ```
 
-Resolution is lazy (first use of the schema), cached for the connector's
-lifetime, and race-safe. Custom connectors get the same behavior from
+Resolution is lazy (first use of the schema), cached on success for the
+connector's lifetime (failures retry on the next query), and race-safe. Custom connectors get the same behavior from
 `source.NewCredential`.
 
 **Custom SQLite management** — the engine drives the per-request database

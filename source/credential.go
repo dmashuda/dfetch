@@ -29,11 +29,14 @@ type CredentialFunc func(ctx context.Context) (string, error)
 //
 // Connectors are built eagerly for every query (engine.New), so resolution is
 // deferred to first use to avoid shelling out (or calling a func) on queries
-// that never touch the connector. All paths run inside a sync.Once — the
-// engine scans a connector's tables concurrently, and Once.Do is what makes
-// the closure's write visible to every other goroutine's read (a bare
-// fast-path read would race the writer). The first caller's ctx governs the
-// func call / command timeout. Both the value and any error are cached.
+// that never touch the connector. A mutex serializes resolution — the engine
+// scans a connector's tables concurrently, so the func/command runs at most
+// once at a time and a successful value is written before any other goroutine
+// reads it. Success is cached for the connector's lifetime; a failure is
+// returned to that caller but NOT cached, so the next Get retries — a
+// canceled first query or a transient secrets-manager hiccup doesn't poison a
+// long-lived process. The resolving caller's ctx governs the func call /
+// command timeout.
 //
 // An empty value with a nil error means nothing is configured (or the env
 // var is unset); each connector decides whether that is an error or an
@@ -45,9 +48,9 @@ type Credential struct {
 	fn     CredentialFunc
 	cmd    []string
 
-	once sync.Once
-	val  string
-	err  error
+	mu       sync.Mutex
+	resolved bool
+	val      string
 }
 
 // NewCredential builds a Credential for the param base name: it reads
@@ -87,30 +90,58 @@ func NewCredential(connector, name string, params map[string]any, staticKey stri
 	return c, nil
 }
 
-// Get resolves the credential on first call and returns the cached value (and
-// error) on every later call. See the Credential doc for precedence and
+// Get resolves the credential on first successful call and returns the cached
+// value on every later call. A failed resolution is returned without being
+// cached, so a later Get retries. See the Credential doc for precedence and
 // concurrency semantics.
 func (c *Credential) Get(ctx context.Context) (string, error) {
-	c.once.Do(func() {
-		if c.static != "" {
-			c.val = c.static
-			return
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.resolved {
+		return c.val, nil
+	}
+	val, err := c.resolve(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.val, c.resolved = val, true
+	return val, nil
+}
+
+// resolve walks the sources in precedence order: static param, env, func,
+// command. Nothing configured resolves to "" with no error.
+func (c *Credential) resolve(ctx context.Context) (string, error) {
+	if c.static != "" {
+		return c.static, nil
+	}
+	if c.env != nil {
+		if v := c.env(); v != "" {
+			return v, nil
 		}
-		if c.env != nil {
-			if v := c.env(); v != "" {
-				c.val = v
-				return
-			}
-		}
-		if c.fn != nil {
-			c.val, c.err = c.fn(ctx)
-			return
-		}
-		if len(c.cmd) > 0 {
-			c.val, c.err = runCommand(ctx, c.name+"_command", c.cmd)
-		}
-	})
-	return c.val, c.err
+	}
+	if c.fn != nil {
+		return c.fn(ctx)
+	}
+	if len(c.cmd) > 0 {
+		return runCommand(ctx, c.name+"_command", c.cmd)
+	}
+	return "", nil
+}
+
+// IntParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
+// int64, or float64). The second result is false when the value is absent or
+// not numeric.
+func IntParam(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 // EnvFirst returns a closure over the environment that yields the first

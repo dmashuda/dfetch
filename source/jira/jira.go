@@ -134,7 +134,7 @@ func apiMessage(status int, body []byte) string {
 		}
 	}
 	if status == http.StatusUnauthorized {
-		msg += " (check $JIRA_EMAIL / $JIRA_API_TOKEN, or auth_header_command)"
+		msg += " (check $JIRA_EMAIL / $JIRA_API_TOKEN, or auth_header_func / auth_header_command)"
 	}
 	return msg
 }

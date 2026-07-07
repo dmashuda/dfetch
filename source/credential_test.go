@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -123,14 +124,55 @@ func TestCredentialLazyAndCached(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load(), "must resolve exactly once")
 }
 
-// Errors are cached like values: the failing source runs once.
-func TestCredentialErrorCached(t *testing.T) {
-	c := mustCredential(t, "token", map[string]any{"token_command": []any{"false"}}, "", nil)
-	_, err1 := c.Get(context.Background())
-	require.Error(t, err1)
-	assert.Contains(t, err1.Error(), `token_command ["false"]`)
-	_, err2 := c.Get(context.Background())
-	assert.Equal(t, err1, err2)
+// A failed resolution is NOT cached: the next Get retries, so a transient
+// failure (or a canceled first query) doesn't poison a long-lived process.
+func TestCredentialErrorRetried(t *testing.T) {
+	var calls atomic.Int32
+	params := map[string]any{
+		"token_func": CredentialFunc(func(context.Context) (string, error) {
+			if calls.Add(1) == 1 {
+				return "", errors.New("transient secrets-manager blip")
+			}
+			return "recovered", nil
+		}),
+	}
+	c := mustCredential(t, "token", params, "", nil)
+
+	_, err := c.Get(context.Background())
+	require.Error(t, err)
+
+	v, err := c.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "recovered", v)
+
+	// Success is cached: no third resolution.
+	v, err = c.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "recovered", v)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+// A cancellation inherited from the first caller's ctx (e.g. a sibling scan's
+// error canceling the errgroup) doesn't latch: the next query resolves fine.
+func TestCredentialCanceledFirstCallRetries(t *testing.T) {
+	params := map[string]any{
+		"token_func": CredentialFunc(func(ctx context.Context) (string, error) {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			return "ok", nil
+		}),
+	}
+	c := mustCredential(t, "token", params, "", nil)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Get(canceled)
+	require.Error(t, err)
+
+	v, err := c.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "ok", v)
 }
 
 // The env closure is consulted at Get time, not at construction.

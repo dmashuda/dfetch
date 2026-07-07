@@ -391,7 +391,9 @@ LIMIT for complete results.
 **Authentication:** a **User API key** from `$NEW_RELIC_API_KEY` (or
 `$DFETCH_NEWRELIC_API_KEY`); else `params.api_key_func` (a Go function,
 programmatic config only); else `params.api_key_command` (an argv whose stdout
-is the key). Resolution is lazy — on first use of a `newrelic.*` table, so a
+is the key). Unlike datagov's public `api_key`, a plain `api_key` param is
+**not** read — keep real secrets out of config files. Resolution is lazy — on
+first use of a `newrelic.*` table, so a
 declared source without a key doesn't break unrelated commands. NerdGraph does
 not accept the ingest license key used for sending telemetry — create a key of
 type "User" under one.newrelic.com → API keys.
