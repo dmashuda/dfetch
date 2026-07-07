@@ -24,9 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dmashuda/dfetch/source"
@@ -43,24 +41,17 @@ const defaultPageSize = 100
 
 // Connector talks to one Jira Cloud site's REST API.
 type Connector struct {
-	client            *http.Client
-	baseURL           string
-	authHeaderCommand []string
-
-	// authHeader is set eagerly in New when $JIRA_EMAIL/$JIRA_API_TOKEN are
-	// present (cheap: no process spawn); auth_header_command is deferred to
-	// first use via authOnce so a query that never touches jira.* doesn't shell
-	// out.
-	authOnce   sync.Once
-	authHeader string
-	authErr    error
+	client     *http.Client
+	baseURL    string
+	authHeader *source.Credential
 }
 
 // New builds a Jira connector. Required: params["base_url"] (e.g.
-// https://yoursite.atlassian.net). Optional: params["auth_header_command"] (argv
-// whose stdout is used verbatim as the Authorization header when
-// $JIRA_EMAIL/$JIRA_API_TOKEN are unset). It is config-only — registered for
-// `type: jira`, never auto-instantiated, because there is no default host.
+// https://yoursite.atlassian.net). Optional: params["auth_header_func"] /
+// params["auth_header_command"] (Go func / argv supplying the Authorization
+// header verbatim when $JIRA_EMAIL/$JIRA_API_TOKEN are unset); resolution is
+// lazy, on first use (see source.Credential). It is config-only — registered
+// for `type: jira`, never auto-instantiated, because there is no default host.
 func New(params map[string]any) (source.Connector, error) {
 	baseURL, _ := params["base_url"].(string)
 	baseURL = strings.TrimSpace(baseURL)
@@ -68,95 +59,28 @@ func New(params map[string]any) (source.Connector, error) {
 		return nil, fmt.Errorf("jira: params.base_url is required (e.g. https://yoursite.atlassian.net)")
 	}
 
-	c := &Connector{
+	// $JIRA_EMAIL + $JIRA_API_TOKEN (both required together) form an HTTP
+	// Basic credential.
+	authHeader, err := source.NewCredential("jira", "auth_header", params, "", func() string {
+		if email, token := os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_API_TOKEN"); email != "" && token != "" {
+			return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
+		}
+		return ""
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
 		// (a no-op until a tracer provider is installed).
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		baseURL:           strings.TrimSuffix(baseURL, "/"),
-		authHeaderCommand: []string{},
-	}
-	if email, token := os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_API_TOKEN"); email != "" && token != "" {
-		c.authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
-	}
-	if raw, ok := params["auth_header_command"]; ok {
-		cmd, err := stringListParam("auth_header_command", raw)
-		if err != nil {
-			return nil, err
-		}
-		c.authHeaderCommand = cmd
-	}
-	return c, nil
-}
-
-// getAuthHeader resolves the Authorization header once, on first use.
-// Connectors are built eagerly for every query (engine.New), so
-// auth_header_command is deferred to Scan to avoid shelling out on queries that
-// never touch jira.*. All paths go through authOnce — the engine Scans jira
-// tables concurrently, and Once.Do is what makes the closure's write of
-// c.authHeader visible to every other goroutine's read (a bare fast-path read
-// would race with the writer).
-func (c *Connector) getAuthHeader(ctx context.Context) (string, error) {
-	c.authOnce.Do(func() {
-		if c.authHeader != "" || len(c.authHeaderCommand) == 0 {
-			return // env-resolved in New, or no auth configured
-		}
-		c.authHeader, c.authErr = runHeaderCommand(ctx, c.authHeaderCommand)
-	})
-	return c.authHeader, c.authErr
-}
-
-// runHeaderCommand runs cmd and returns its stdout (trailing newline trimmed),
-// used verbatim as the Authorization header value.
-func runHeaderCommand(ctx context.Context, cmd []string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	// #nosec G204 -- auth_header_command is explicit user configuration and is
-	// run directly without a shell.
-	out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).Output()
-	if err != nil {
-		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			stderr := strings.TrimRight(string(ee.Stderr), "\n")
-			if stderr != "" {
-				return "", fmt.Errorf("auth_header_command %q: %w: %s", cmd, err, stderr)
-			}
-		}
-		return "", fmt.Errorf("auth_header_command %q: %w", cmd, err)
-	}
-	return strings.TrimRight(string(out), "\n"), nil
-}
-
-func stringListParam(name string, raw any) ([]string, error) {
-	switch v := raw.(type) {
-	case []string:
-		return cleanStringList(name, v)
-	case []any:
-		items := make([]string, len(v))
-		for i, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("jira: %s[%d] must be a string", name, i)
-			}
-			items[i] = s
-		}
-		return cleanStringList(name, items)
-	default:
-		return nil, fmt.Errorf("jira: %s must be a list of strings", name)
-	}
-}
-
-func cleanStringList(name string, items []string) ([]string, error) {
-	out := make([]string, 0, len(items))
-	for i, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			return nil, fmt.Errorf("jira: %s[%d] must not be empty", name, i)
-		}
-		out = append(out, item)
-	}
-	return out, nil
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
+		authHeader: authHeader,
+	}, nil
 }
 
 // Tables returns the schemas of the jira.* tables.
@@ -170,7 +94,7 @@ func (c *Connector) Tables() []source.TableSchema {
 
 // Scan dispatches to the per-table fetchers, which emit one chunk per API page.
 func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
-	if _, err := c.getAuthHeader(ctx); err != nil {
+	if _, err := c.authHeader.Get(ctx); err != nil {
 		return err
 	}
 	switch req.Table {
@@ -230,12 +154,12 @@ func (c *Connector) doJSON(ctx context.Context, method, rawurl string, body []by
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	authHeader, err := c.getAuthHeader(ctx)
+	authHeader, err := c.authHeader.Get(ctx)
 	if err != nil {
 		return err
 	}
 	if authHeader == "" {
-		return errors.New("jira: no credentials configured; set $JIRA_EMAIL + $JIRA_API_TOKEN or params.auth_header_command")
+		return errors.New("jira: no credentials configured; set $JIRA_EMAIL + $JIRA_API_TOKEN, or params.auth_header_func, or params.auth_header_command")
 	}
 	req.Header.Set("Authorization", authHeader)
 

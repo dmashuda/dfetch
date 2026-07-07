@@ -12,15 +12,12 @@ package slack
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dmashuda/dfetch/source"
@@ -39,26 +36,41 @@ const defaultPageSize = 200
 
 // Connector talks to the Slack Web API.
 type Connector struct {
-	client            *http.Client
-	baseURL           string
-	authHeaderCommand []string
-	cookieCommand     []string
-
-	authOnce   sync.Once
-	authHeader string
-	authErr    error
-
-	cookieOnce sync.Once
-	cookie     string
-	cookieErr  error
+	client     *http.Client
+	baseURL    string
+	authHeader *source.Credential
+	cookie     *source.Credential
 }
 
 // New builds a Slack connector. Supported params: "base_url" (override the API
-// host, used in tests), "auth_header_command" (argv whose stdout is used verbatim
-// as the Authorization header when $SLACK_TOKEN is unset), and "cookie_command"
-// (argv whose stdout is used verbatim as the Cookie header when $SLACK_COOKIE is
-// unset).
+// host, used in tests), "auth_header_func"/"auth_header_command" (Go func /
+// argv supplying the Authorization header verbatim when $SLACK_TOKEN is
+// unset), and "cookie_func"/"cookie_command" (likewise for the Cookie header
+// when $SLACK_COOKIE is unset). Both resolve lazily on first use (see
+// source.Credential).
 func New(params map[string]any) (source.Connector, error) {
+	// $SLACK_TOKEN holds a bare token; Slack expects it as a Bearer credential.
+	authHeader, err := source.NewCredential("slack", "auth_header", params, "", func() string {
+		if tok := os.Getenv("SLACK_TOKEN"); tok != "" {
+			return "Bearer " + tok
+		}
+		return ""
+	})
+	if err != nil {
+		return nil, err
+	}
+	// $SLACK_COOKIE holds the bare "d" cookie value (xoxd-...); Slack expects it
+	// as the "d" cookie.
+	cookie, err := source.NewCredential("slack", "cookie", params, "", func() string {
+		if ck := os.Getenv("SLACK_COOKIE"); ck != "" {
+			return "d=" + ck
+		}
+		return ""
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
 		// (a no-op until a tracer provider is installed).
@@ -66,119 +78,14 @@ func New(params map[string]any) (source.Connector, error) {
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
-		baseURL:           defaultBaseURL,
-		authHeaderCommand: []string{},
-		cookieCommand:     []string{},
-	}
-	// $SLACK_TOKEN holds a bare token; Slack expects it as a Bearer credential.
-	if tok := firstEnv("SLACK_TOKEN"); tok != "" {
-		c.authHeader = "Bearer " + tok
-	}
-	// $SLACK_COOKIE holds the bare "d" cookie value (xoxd-...); Slack expects it
-	// as the "d" cookie.
-	if ck := firstEnv("SLACK_COOKIE"); ck != "" {
-		c.cookie = "d=" + ck
+		baseURL:    defaultBaseURL,
+		authHeader: authHeader,
+		cookie:     cookie,
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
-	if raw, ok := params["auth_header_command"]; ok {
-		cmd, err := stringListParam("auth_header_command", raw)
-		if err != nil {
-			return nil, err
-		}
-		c.authHeaderCommand = cmd
-	}
-	if raw, ok := params["cookie_command"]; ok {
-		cmd, err := stringListParam("cookie_command", raw)
-		if err != nil {
-			return nil, err
-		}
-		c.cookieCommand = cmd
-	}
 	return c, nil
-}
-
-// getAuthHeader resolves the Authorization header once, on first use. Connectors
-// are built eagerly for every query (engine.New), so auth_header_command is
-// deferred to Scan to avoid shelling out on queries that never touch slack.*.
-func (c *Connector) getAuthHeader(ctx context.Context) (string, error) {
-	if c.authHeader != "" || len(c.authHeaderCommand) == 0 {
-		return c.authHeader, nil
-	}
-	c.authOnce.Do(func() { c.authHeader, c.authErr = runHeaderCommand(ctx, "auth_header_command", c.authHeaderCommand) })
-	return c.authHeader, c.authErr
-}
-
-// getCookie resolves the Cookie header once, on first use, mirroring
-// getAuthHeader: the env value (resolved in New) wins, otherwise cookie_command
-// is run lazily so queries that never touch slack.* don't shell out.
-func (c *Connector) getCookie(ctx context.Context) (string, error) {
-	if c.cookie != "" || len(c.cookieCommand) == 0 {
-		return c.cookie, nil
-	}
-	c.cookieOnce.Do(func() { c.cookie, c.cookieErr = runHeaderCommand(ctx, "cookie_command", c.cookieCommand) })
-	return c.cookie, c.cookieErr
-}
-
-// runHeaderCommand runs cmd and returns its stdout (trailing newline trimmed) as
-// a header value, used verbatim by the connector. name labels the param in errors.
-func runHeaderCommand(ctx context.Context, name string, cmd []string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	// #nosec G204 -- the command is explicit user configuration and is run
-	// directly without a shell.
-	out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).Output()
-	if err != nil {
-		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			stderr := strings.TrimRight(string(ee.Stderr), "\n")
-			if stderr != "" {
-				return "", fmt.Errorf("%s %q: %w: %s", name, cmd, err, stderr)
-			}
-		}
-		return "", fmt.Errorf("%s %q: %w", name, cmd, err)
-	}
-	return strings.TrimRight(string(out), "\n"), nil
-}
-
-func stringListParam(name string, raw any) ([]string, error) {
-	switch v := raw.(type) {
-	case []string:
-		return cleanStringList(name, v)
-	case []any:
-		items := make([]string, len(v))
-		for i, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("slack: %s[%d] must be a string", name, i)
-			}
-			items[i] = s
-		}
-		return cleanStringList(name, items)
-	default:
-		return nil, fmt.Errorf("slack: %s must be a list of strings", name)
-	}
-}
-
-func cleanStringList(name string, items []string) ([]string, error) {
-	out := make([]string, 0, len(items))
-	for i, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			return nil, fmt.Errorf("slack: %s[%d] must not be empty", name, i)
-		}
-		out = append(out, item)
-	}
-	return out, nil
-}
-
-func firstEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // Tables returns the schemas of the slack.* tables.
@@ -193,10 +100,10 @@ func (c *Connector) Tables() []source.TableSchema {
 
 // Scan dispatches to the per-table fetchers, which emit one chunk per API page.
 func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
-	if _, err := c.getAuthHeader(ctx); err != nil {
+	if _, err := c.authHeader.Get(ctx); err != nil {
 		return err
 	}
-	if _, err := c.getCookie(ctx); err != nil {
+	if _, err := c.cookie.Get(ctx); err != nil {
 		return err
 	}
 	switch req.Table {
@@ -236,11 +143,12 @@ func (c *Connector) get(ctx context.Context, method string, q url.Values, v any)
 	if err != nil {
 		return "", fmt.Errorf("slack: GET %s: %w", method, err)
 	}
-	if c.authHeader != "" {
-		req.Header.Set("Authorization", c.authHeader)
+	// Both cached after the resolution in Scan; errors surfaced there.
+	if h, _ := c.authHeader.Get(ctx); h != "" {
+		req.Header.Set("Authorization", h)
 	}
-	if c.cookie != "" {
-		req.Header.Set("Cookie", c.cookie)
+	if ck, _ := c.cookie.Get(ctx); ck != "" {
+		req.Header.Set("Cookie", ck)
 	}
 
 	resp, err := c.client.Do(req)
