@@ -58,18 +58,18 @@ func TestInsertBulkAcrossBatches(t *testing.T) {
 	}
 	require.NoError(t, db.Insert(ctx, "", ts.Name, ts.ColumnNames(), rows))
 
-	res, err := db.Query(ctx, `SELECT COUNT(*), MIN(c0), MAX(c0) FROM wide`)
+	_, rows, err := db.Query(ctx, `SELECT COUNT(*), MIN(c0), MAX(c0) FROM wide`)
 	require.NoError(t, err)
-	require.Len(t, res.Rows, 1)
-	assert.Equal(t, int64(n), res.Rows[0][0])
-	assert.Equal(t, int64(0), res.Rows[0][1])
-	assert.Equal(t, int64(n-1), res.Rows[0][2])
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(n), rows[0][0])
+	assert.Equal(t, int64(0), rows[0][1])
+	assert.Equal(t, int64(n-1), rows[0][2])
 
 	// Spot-check a row in a later batch resolves correctly.
-	res, err = db.Query(ctx, `SELECT c0 FROM wide WHERE c0 = 1234`)
+	_, rows, err = db.Query(ctx, `SELECT c0 FROM wide WHERE c0 = 1234`)
 	require.NoError(t, err)
-	require.Len(t, res.Rows, 1)
-	assert.Equal(t, int64(1234), res.Rows[0][0])
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(1234), rows[0][0])
 }
 
 func TestOpenClose(t *testing.T) {
@@ -90,12 +90,12 @@ func TestCreateInsertQuery(t *testing.T) {
 	}
 	require.NoError(t, db.Insert(ctx, "", ts.Name, ts.ColumnNames(), rows))
 
-	res, err := db.Query(ctx, "SELECT number, title FROM issues WHERE state = 'open' ORDER BY number")
+	cols, rows, err := db.Query(ctx, "SELECT number, title FROM issues WHERE state = 'open' ORDER BY number")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"number", "title"}, res.Columns)
-	require.Len(t, res.Rows, 1)
-	assert.Equal(t, int64(1), res.Rows[0][0])
-	assert.Equal(t, "first", res.Rows[0][1])
+	assert.Equal(t, []string{"number", "title"}, cols)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(1), rows[0][0])
+	assert.Equal(t, "first", rows[0][1])
 }
 
 // TestQueryNamedBindParam confirms named bind parameters (:name) reach the
@@ -111,13 +111,13 @@ func TestQueryNamedBindParam(t *testing.T) {
 		{int64(2), "second", "closed"},
 	}))
 
-	res, err := db.Query(ctx,
+	_, rows, err := db.Query(ctx,
 		"SELECT number, title FROM issues WHERE state = :state ORDER BY number",
 		sql.Named("state", "closed"))
 	require.NoError(t, err)
-	require.Len(t, res.Rows, 1)
-	assert.Equal(t, int64(2), res.Rows[0][0])
-	assert.Equal(t, "second", res.Rows[0][1])
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(2), rows[0][0])
+	assert.Equal(t, "second", rows[0][1])
 }
 
 // TestAttachedSchemaQualifiedTable is the core engine scenario: a schema-
@@ -137,10 +137,10 @@ func TestAttachedSchemaQualifiedTable(t *testing.T) {
 		{int64(11), "feat", "open"},
 	}))
 
-	res, err := db.Query(ctx, "SELECT number FROM github.issues ORDER BY number DESC LIMIT 1")
+	_, rows, err := db.Query(ctx, "SELECT number FROM github.issues ORDER BY number DESC LIMIT 1")
 	require.NoError(t, err)
-	require.Len(t, res.Rows, 1)
-	assert.Equal(t, int64(11), res.Rows[0][0])
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(11), rows[0][0])
 }
 
 func TestInsertEmptyIsNoop(t *testing.T) {
@@ -151,9 +151,9 @@ func TestInsertEmptyIsNoop(t *testing.T) {
 	require.NoError(t, db.CreateTable(ctx, "", ts))
 	require.NoError(t, db.Insert(ctx, "", ts.Name, ts.ColumnNames(), nil))
 
-	res, err := db.Query(ctx, "SELECT COUNT(*) FROM issues")
+	_, rows, err := db.Query(ctx, "SELECT COUNT(*) FROM issues")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), res.Rows[0][0])
+	assert.Equal(t, int64(0), rows[0][0])
 }
 
 func TestInsertWrongArity(t *testing.T) {
@@ -170,6 +170,6 @@ func TestQuerySyntaxError(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
 
-	_, err := db.Query(ctx, "SELECT FROM nope")
+	_, _, err := db.Query(ctx, "SELECT FROM nope")
 	assert.Error(t, err)
 }

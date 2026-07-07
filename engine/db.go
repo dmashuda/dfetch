@@ -22,8 +22,9 @@ type DB interface {
 	// values are ordered to match cols. The engine serializes Insert calls.
 	Insert(ctx context.Context, schema, table string, cols []string, rows [][]any) error
 	// Query runs the original SQL against the loaded tables, binding args (e.g.
-	// sql.Named values for :name parameters).
-	Query(ctx context.Context, query string, args ...any) (*localdb.Result, error)
+	// sql.Named values for :name parameters), and returns the column names plus
+	// the rows in column order.
+	Query(ctx context.Context, query string, args ...any) (columns []string, rows [][]any, err error)
 	// Close releases the database and any files backing it. Called once per run.
 	Close() error
 }

@@ -32,12 +32,6 @@ type DB struct {
 	attached map[string]struct{}
 }
 
-// Result holds the columns and rows produced by a resolved query.
-type Result struct {
-	Columns []string
-	Rows    [][]any
-}
-
 // Open creates a fresh per-request SQLite database backed by a temporary file on
 // disk and pins a connection to it. The temp file (and any attached-schema files)
 // live under a per-request directory that Close removes.
@@ -162,19 +156,20 @@ func (db *DB) Insert(ctx context.Context, schema, table string, cols []string, r
 	return tx.Commit()
 }
 
-// Query runs the resolved SQL against the local database and returns the rows,
-// with []byte values normalized to strings. Optional args are bound as query
-// parameters (e.g. sql.Named for :name binds).
-func (db *DB) Query(ctx context.Context, query string, args ...any) (*Result, error) {
+// Query runs the resolved SQL against the local database and returns the
+// column names and rows (in column order), with []byte values normalized to
+// strings. Optional args are bound as query parameters (e.g. sql.Named for
+// :name binds).
+func (db *DB) Query(ctx context.Context, query string, args ...any) ([]string, [][]any, error) {
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var out [][]any
@@ -185,7 +180,7 @@ func (db *DB) Query(ctx context.Context, query string, args ...any) (*Result, er
 			ptrs[i] = &cells[i]
 		}
 		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for i, v := range cells {
 			if b, ok := v.([]byte); ok {
@@ -195,9 +190,9 @@ func (db *DB) Query(ctx context.Context, query string, args ...any) (*Result, er
 		out = append(out, cells)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &Result{Columns: cols, Rows: out}, nil
+	return cols, out, nil
 }
 
 // Close releases the pinned connection and the database, then removes the

@@ -270,7 +270,9 @@ eng, err := engine.New(
 ```
 
 Options apply in order and the last registration of a schema name wins, which
-is how config overrides a builtin.
+is how config overrides a builtin. `WithRegistry` merges rather than replaces,
+so appending your own registry after `connectors.DefaultOptions()` adds or
+overrides connector types without losing the default ones.
 
 **Custom SQLite management** — the engine drives the per-request database
 through the `engine.DB` interface (`Attach`, `CreateTable`, `Insert`, `Query`,

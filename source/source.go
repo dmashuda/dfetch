@@ -161,6 +161,19 @@ func (r *Registry) Register(typeName string, f Factory) {
 	r.factories[typeName] = f
 }
 
+// Merge copies every factory from other into r, overwriting r's entry when
+// both registries define the same type name. Unlike Register it never panics:
+// merging is deliberate composition (e.g. layering a custom registry over the
+// default set), so the later registry wins. A nil other is a no-op.
+func (r *Registry) Merge(other *Registry) {
+	if other == nil {
+		return
+	}
+	for typeName, f := range other.factories {
+		r.factories[typeName] = f
+	}
+}
+
 // Build constructs a Connector for the given type and params.
 func (r *Registry) Build(typeName string, params map[string]any) (Connector, error) {
 	f, ok := r.factories[typeName]

@@ -47,25 +47,22 @@ func WithSources(sources ...config.SourceConfig) Option {
 // WithConfig registers every source declared in cfg, equivalent to
 // WithSources(cfg.Sources...). A nil cfg is a no-op.
 func WithConfig(cfg *config.Config) Option {
-	return func(s *settings) {
-		if cfg == nil {
-			return
-		}
-		for _, sc := range cfg.Sources {
-			s.ops = append(s.ops, connectorOp{src: sc})
-		}
+	if cfg == nil {
+		return func(*settings) {}
 	}
+	return WithSources(cfg.Sources...)
 }
 
-// WithRegistry sets the factory registry used to build WithSources/WithConfig
-// entries. Without it the registry is empty, so any typed source fails at New
-// with "unknown connector type". The connectors package provides
-// DefaultRegistry() with every built-in type.
+// WithRegistry merges reg's factories into the registry used to build
+// WithSources/WithConfig entries; on a type name both define, the later
+// WithRegistry wins. Without any WithRegistry the registry is empty, so every
+// typed source fails at New with "unknown connector type". The connectors
+// package provides DefaultRegistry() with every built-in type — appending
+// WithRegistry(myReg) after connectors.DefaultOptions() adds or overrides
+// types without losing the defaults.
 func WithRegistry(reg *source.Registry) Option {
 	return func(s *settings) {
-		if reg != nil {
-			s.registry = reg
-		}
+		s.registry.Merge(reg)
 	}
 }
 

@@ -42,6 +42,30 @@ func TestNewWithSourcesAndRegistry(t *testing.T) {
 	assert.Len(t, res.Rows, 3)
 }
 
+// A second WithRegistry merges into the first instead of replacing it, so
+// layering a custom registry over a default set keeps the default types.
+func TestWithRegistryMerges(t *testing.T) {
+	base := source.NewRegistry()
+	base.Register("kept", func(map[string]any) (source.Connector, error) { return issuesConn(), nil })
+	base.Register("shared", func(map[string]any) (source.Connector, error) { return &fakeConn{}, nil })
+
+	override := issuesConn()
+	extra := source.NewRegistry()
+	extra.Register("shared", func(map[string]any) (source.Connector, error) { return override, nil })
+
+	e, err := New(
+		WithRegistry(base),
+		WithRegistry(extra),
+		WithSources(
+			config.SourceConfig{Name: "a", Type: "kept"},   // survives the second WithRegistry
+			config.SourceConfig{Name: "b", Type: "shared"}, // later registry wins
+		),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, e.connectors["a"])
+	assert.Same(t, override, e.connectors["b"])
+}
+
 // Without a registry, a typed source fails at New with the unknown-type error.
 func TestNewTypedSourceWithoutRegistryErrors(t *testing.T) {
 	_, err := New(WithSources(config.SourceConfig{Name: "db", Type: "postgres"}))
@@ -100,7 +124,7 @@ func (r *recordingDB) Insert(ctx context.Context, schema, table string, cols []s
 	return r.inner.Insert(ctx, schema, table, cols, rows)
 }
 
-func (r *recordingDB) Query(ctx context.Context, query string, args ...any) (*localdb.Result, error) {
+func (r *recordingDB) Query(ctx context.Context, query string, args ...any) ([]string, [][]any, error) {
 	r.calls = append(r.calls, "query")
 	return r.inner.Query(ctx, query, args...)
 }

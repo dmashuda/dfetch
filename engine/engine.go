@@ -174,11 +174,11 @@ func (e *Engine) RunWithParams(ctx context.Context, query string, params map[str
 		return nil, recordErr(span, err)
 	}
 
-	res, err := db.Query(ctx, q.Raw, namedArgs(params)...)
+	cols, rows, err := db.Query(ctx, q.Raw, namedArgs(params)...)
 	if err != nil {
 		return nil, recordErr(span, fmt.Errorf("executing query on the local database: %w", err))
 	}
-	return &Result{Columns: res.Columns, Rows: res.Rows, Warnings: warnings}, nil
+	return &Result{Columns: cols, Rows: rows, Warnings: warnings}, nil
 }
 
 // namedArgs converts a params map into sql.Named bind arguments. The order is

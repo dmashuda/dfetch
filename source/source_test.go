@@ -39,6 +39,29 @@ func TestRegistryRegisterDuplicatePanics(t *testing.T) {
 	assert.Panics(t, func() { r.Register("x", f) })
 }
 
+// Merge adds the other registry's types and, unlike Register, overwrites
+// shared type names without panicking (later registry wins).
+func TestRegistryMerge(t *testing.T) {
+	winner := fakeConnector{}
+	base := NewRegistry()
+	base.Register("kept", func(map[string]any) (Connector, error) { return fakeConnector{}, nil })
+	base.Register("shared", func(map[string]any) (Connector, error) { return nil, ErrNotImplemented })
+
+	extra := NewRegistry()
+	extra.Register("shared", func(map[string]any) (Connector, error) { return winner, nil })
+
+	base.Merge(extra)
+	base.Merge(nil) // no-op
+
+	c, err := base.Build("kept", nil)
+	require.NoError(t, err)
+	assert.NotNil(t, c)
+
+	c, err = base.Build("shared", nil)
+	require.NoError(t, err)
+	assert.Equal(t, winner, c)
+}
+
 func TestTableSchemaColumnNames(t *testing.T) {
 	ts := TableSchema{Columns: []Column{{Name: "a"}, {Name: "b"}}}
 	assert.Equal(t, []string{"a", "b"}, ts.ColumnNames())
