@@ -98,6 +98,13 @@ code in those layers should keep `context` threaded so spans nest correctly.
 
 ## Conventions
 
+- **Credentials:** connector secrets resolve via `source.Credential`
+  (`source/credential.go`) with fixed precedence: plain param > env var >
+  `<x>_func` (Go func, programmatic config only) > `<x>_command` (argv, no
+  shell). Resolution is lazy (first use, never at construction), once, and
+  race-safe. New connectors build one with `source.NewCredential` and call
+  `Get` at the top of `Scan`; auth tests must clear the relevant env vars with
+  `t.Setenv` (env wins, so ambient credentials shadow the source under test).
 - **Testing:** use [testify](https://github.com/stretchr/testify) — `require` for
   fatal assertions, `assert` for non-fatal. Do not write bare
   `if got != want { t.Fatalf(...) }` checks in new tests.

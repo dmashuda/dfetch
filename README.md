@@ -274,6 +274,31 @@ is how config overrides a builtin. `WithRegistry` merges rather than replaces,
 so appending your own registry after `connectors.DefaultOptions()` adds or
 overrides connector types without losing the default ones.
 
+**Credentials without env vars** — every connector secret resolves through the
+same chain: a plain param, else its env var(s), else a `<x>_func` param holding
+a Go function, else a `<x>_command` param naming a command to run. The function
+form only exists for programmatic config (YAML can't express it) and is how an
+embedding program plugs in its own secret store:
+
+```go
+eng, err := engine.New(
+    engine.WithRegistry(connectors.DefaultRegistry()),
+    engine.WithSources(config.SourceConfig{
+        Name: "github",
+        Type: "github",
+        Params: map[string]any{
+            "token_func": func(ctx context.Context) (string, error) {
+                return mySecrets.Fetch(ctx, "github-token")
+            },
+        },
+    }),
+)
+```
+
+Resolution is lazy (first use of the schema), cached for the connector's
+lifetime, and race-safe. Custom connectors get the same behavior from
+`source.NewCredential`.
+
 **Custom SQLite management** — the engine drives the per-request database
 through the `engine.DB` interface (`Attach`, `CreateTable`, `Insert`, `Query`,
 `Close`) and opens one per run via `engine.WithDB`. The default is `localdb`

@@ -62,9 +62,12 @@ dfetch query "SELECT a.name, a.size_in_bytes, r.run_number, r.conclusion
 ```
 <!-- END EXAMPLES github -->
 
-**Authentication:** set `GITHUB_TOKEN` (or `GH_TOKEN`) to authenticate. If neither
-is set, dfetch runs `params.token_command` (default: `["gh", "auth", "token"]`)
-to get a token.
+**Authentication:** a bare token (sent as `Bearer <token>`) from `GITHUB_TOKEN`
+(or `GH_TOKEN`); else `params.token_func` (a Go function, programmatic config
+only); else `params.token_command` (an argv whose stdout is the token).
+Resolution is lazy — the command/function runs only when a `github.*` table is
+actually queried. Unauthenticated requests work with GitHub's lower rate
+limits.
 
 ```sh
 GITHUB_TOKEN=ghp_… dfetch query "SELECT * FROM github.repos WHERE owner='golang'"
@@ -131,7 +134,11 @@ Notes:
   that isn't strictly below the server's own max-traces limit (`search depth must
   be greater than 0 and less than max traces`); set `max_traces` below that limit
   only if you want a deterministic cap.
-- Set `JAEGER_TOKEN` for a bearer-authenticated deployment.
+- **Authentication:** none for a local Jaeger. For a bearer-authenticated
+  deployment, a bare token (sent as `Bearer <token>`) comes from
+  `JAEGER_TOKEN`; else `params.token_func` (a Go function, programmatic config
+  only); else `params.token_command` (an argv whose stdout is the token).
+  Resolution is lazy — on first use of a `jaeger.*` table.
 
 ## data.gov / CKAN — schema `datagov`
 
@@ -185,10 +192,14 @@ Notes:
   predicates are re-applied locally by SQLite.
 - No required filters, but an unfiltered scan is capped (it won't page through the
   whole catalog); add a `q`/`WHERE`/`LIMIT` to narrow it.
-- No API key is needed. data.gov has moved its primary endpoint behind the GSA
-  `api.gsa.gov` gateway; the default `base_url` (`catalog-old.data.gov`) still
-  serves the standard API. To use the gateway, set `base_url`,
-  `action_path: /v3/action`, and an `api_key` (e.g. `DEMO_KEY`) in config.
+- **Authentication:** none for the default endpoint. data.gov has moved its
+  primary endpoint behind the GSA `api.gsa.gov` gateway; the default `base_url`
+  (`catalog-old.data.gov`) still serves the standard API. To use the gateway,
+  set `base_url`, `action_path: /v3/action`, and a key (e.g. `DEMO_KEY`, sent
+  as the `api_key` query parameter). The key comes from `params.api_key`; else
+  `CKAN_API_KEY`; else `params.api_key_func` (a Go function, programmatic
+  config only); else `params.api_key_command` (an argv whose stdout is the
+  key). Resolution is lazy — on first use of a `datagov.*` table.
 
 ## Docker — schema `docker`
 
@@ -267,10 +278,12 @@ dfetch query "SELECT ts, channel_name, username, text
               WHERE query = 'deploy' LIMIT 20"
 ```
 
-**Authentication:** Slack requires an `Authorization: Bearer <token>` header. Set
-`SLACK_TOKEN` to a bare token (sent as `Bearer <token>`), or configure
+**Authentication:** Slack requires an `Authorization: Bearer <token>` header.
+The header comes from `SLACK_TOKEN` (a bare token, sent as `Bearer <token>`);
+else `params.auth_header_func` (a Go function, programmatic config only); else
 `params.auth_header_command` — an argv whose stdout is used **verbatim** as the
-header value, so it can emit any scheme:
+header value, so it can emit any scheme. Resolution is lazy — on first use of a
+`slack.*` table.
 
 ```yaml
 sources:
@@ -280,6 +293,11 @@ sources:
       # full header value, used as-is (e.g. "Bearer xoxb-…")
       auth_header_command: ["cat", "/run/secrets/slack-auth-header"]
 ```
+
+Browser session tokens (`xoxc-…`) additionally require Slack's `d` cookie: set
+`SLACK_COOKIE` to the bare cookie value (sent as `Cookie: d=<value>`); else
+`params.cookie_func`; else `params.cookie_command` (stdout used **verbatim** as
+the Cookie header). Same lazy resolution and precedence as the auth header.
 
 `slack.search` requires a **user token** (`xoxp-…`); bot tokens (`xoxb-…`) cannot
 call `search.messages` and the API returns `not_allowed_token_type`.
@@ -301,9 +319,13 @@ sources:
       # max_rows: 100000       # cap on a scan whose LIMIT can't be pushed
 ```
 
-The DSN comes from `$DFETCH_POSTGRES_DSN` (or `$DATABASE_URL`), or a `dsn` param.
-To expose more than one Postgres schema, register more sources (e.g. a second
-`analytics` source with `schema: analytics`).
+**Authentication:** the credential lives in the DSN. It comes from
+`params.dsn`; else `$DFETCH_POSTGRES_DSN` (or `$DATABASE_URL`); else
+`params.dsn_func` (a Go function, programmatic config only); else
+`params.dsn_command` (an argv whose stdout is the DSN). Resolution is lazy —
+the pool opens on first use of a `warehouse.*` table, and a missing DSN errors
+there rather than at startup. To expose more than one Postgres schema, register
+more sources (e.g. a second `analytics` source with `schema: analytics`).
 
 ```sh
 DFETCH_POSTGRES_DSN='postgres://user:pass@host:5432/db?sslmode=disable' \
@@ -366,10 +388,13 @@ bound only the **last hour** is searched (with a warning), and no event scan
 returns more than **5000 rows** (NRQL's hard cap) — narrow the window or push a
 LIMIT for complete results.
 
-**Authentication:** a **User API key** in `$NEW_RELIC_API_KEY` (or
-`$DFETCH_NEWRELIC_API_KEY`). NerdGraph does not accept the ingest license key
-used for sending telemetry — create a key of type "User" under
-one.newrelic.com → API keys.
+**Authentication:** a **User API key** from `$NEW_RELIC_API_KEY` (or
+`$DFETCH_NEWRELIC_API_KEY`); else `params.api_key_func` (a Go function,
+programmatic config only); else `params.api_key_command` (an argv whose stdout
+is the key). Resolution is lazy — on first use of a `newrelic.*` table, so a
+declared source without a key doesn't break unrelated commands. NerdGraph does
+not accept the ingest license key used for sending telemetry — create a key of
+type "User" under one.newrelic.com → API keys.
 
 ## Jira — connector type `jira`
 
@@ -434,8 +459,9 @@ plain text.
 
 **Authentication (required):** HTTP Basic with `$JIRA_EMAIL` + `$JIRA_API_TOKEN`
 (create a token at
-[id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)),
-or configure `params.auth_header_command` — an argv whose stdout is used
-**verbatim** as the Authorization header. With neither configured, a jira query
-fails with a message naming both options; a `401` response is reported with the
-same hint.
+[id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens));
+else `params.auth_header_func` (a Go function, programmatic config only); else
+`params.auth_header_command` — an argv whose stdout is used **verbatim** as the
+Authorization header. Resolution is lazy — on first use of a `jira.*` table.
+With nothing configured, a jira query fails with a message naming the options;
+a `401` response is reported with the same hint.

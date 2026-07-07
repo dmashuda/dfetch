@@ -311,9 +311,24 @@ registration of a schema name wins — so config overrides a builtin.
 `engine.WithConfig`. See the "Use as a library" section of the root README.
 
 **Params and secrets:** read structured options from `params` (type-assert, e.g.
-`params["base_url"].(string)`); read secrets/tokens from the environment, not
-config (e.g. `os.Getenv("GITHUB_TOKEN")`). Always accept a `base_url`-style
-override — it's what lets tests point at a local `httptest` server.
+`params["base_url"].(string)`). Secrets go through `source.Credential` — the
+standard lazy resolver every connector uses. Build one in `New`:
+
+```go
+token, err := source.NewCredential("myconn", "token", params, "",
+    source.EnvFirst("MYCONN_TOKEN"))
+```
+
+and call `token.Get(ctx)` at the start of `Scan`. That one line gives your
+connector the full standard trio with fixed precedence: a static param (when
+you name one), else the environment, else `params["token_func"]` (a Go
+function, programmatic config only), else `params["token_command"]` (an argv
+run without a shell, 5s timeout). Resolution is lazy (never at construction —
+connectors are built eagerly for every query), happens exactly once, and is
+race-safe under concurrent Scans. When the env value needs shaping (a
+`"Bearer "` prefix, a Basic pair), pass your own closure instead of `EnvFirst`
+— see slack/jira. Always accept a `base_url`-style override — it's what lets
+tests point at a local `httptest` server.
 
 ## Observability
 
@@ -400,9 +415,11 @@ auto-instantiated), so it has no `base_url`-style builtin default.
 ## Step-by-step
 
 1. **Create the package** `source/<name>/<name>.go`: a `Connector`
-   struct (HTTP client with `otelhttp` transport, base URL, optional token) and a
-   `New(params) (source.Connector, error)` factory reading `params["base_url"]`
-   and env secrets, defaulting so `New(nil)` works.
+   struct (HTTP client with `otelhttp` transport, base URL, optional
+   `*source.Credential`) and a `New(params) (source.Connector, error)` factory
+   reading `params["base_url"]` and building the credential with
+   `source.NewCredential` (see [Params and secrets](#registration-and-configuration)),
+   defaulting so `New(nil)` works.
 2. **Declare tables/columns** (often in a `tables.go`): `[]source.Column` per
    table with SQLite affinities, and `Tables()` returning them.
 3. **Implement `Scan`**: dispatch on `req.Table` to a per-table `scanX`; build the
@@ -421,6 +438,7 @@ auto-instantiated), so it has no `base_url`-style builtin default.
 
 - [ ] `source/<name>/` package with `New`, `Tables`, `Scan`
 - [ ] `New(nil)` works with sensible defaults; `base_url` override supported
+- [ ] Secrets resolve via `source.NewCredential` (env / `<x>_func` / `<x>_command`), lazily at `Scan`
 - [ ] Columns use SQLite affinities; rows match column count/order; `nil`/`int64`/`bool` used correctly
 - [ ] Push-down only when safe; required filters error; unbounded scans capped
 - [ ] One chunk emitted per page; `ctx` threaded; `emit` errors propagated
