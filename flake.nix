@@ -29,7 +29,7 @@
         };
 
         # go-overlay tracks every Go release within hours, so fromGoMod resolves
-        # the exact toolchain pinned in go.mod (1.26.4) even before nixpkgs ships
+        # the exact toolchain pinned in go.mod (1.26.5) even before nixpkgs ships
         # it — no go.mod patching or GOTOOLCHAIN network fetch needed.
         go = pkgs.go-bin.fromGoMod ./go.mod;
 
@@ -51,7 +51,7 @@
           pname = "dfetch";
           inherit version;
           src = ./.;
-          vendorHash = "sha256-4aP2+bHO0bajIjTMX7w8FWvbxtuLdLKfKsN3OtbjmkA=";
+          vendorHash = "sha256-w3e6eJpEHq6kk+xVeEiwkZrk/TA8vKLRomVsRm84quI=";
           # mattn/go-sqlite3 bundles its own SQLite C source, so cgo needs only a
           # C compiler (provided by stdenv); no system sqlite dependency.
           env.CGO_ENABLED = "1";
