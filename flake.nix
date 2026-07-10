@@ -29,7 +29,7 @@
         };
 
         # go-overlay tracks every Go release within hours, so fromGoMod resolves
-        # the exact toolchain pinned in go.mod (1.26.4) even before nixpkgs ships
+        # the exact toolchain pinned in go.mod (1.26.5) even before nixpkgs ships
         # it — no go.mod patching or GOTOOLCHAIN network fetch needed.
         go = pkgs.go-bin.fromGoMod ./go.mod;
 
