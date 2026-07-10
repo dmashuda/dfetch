@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -43,7 +42,7 @@ const defaultWarnTraces = 1000
 type Connector struct {
 	client    *http.Client
 	baseURL   string
-	token     string
+	token     *source.Credential
 	maxTraces int // 0 = unset (omit search_depth; let the server bound the scan)
 }
 
@@ -51,9 +50,14 @@ type Connector struct {
 // Jaeger query host; defaults to http://localhost:16686, also used by tests) and
 // "max_traces" (an explicit api_v3 search_depth cap; omitted by default so the
 // server's own limit applies — set it below the server's max-traces if you want a
-// deterministic cap). An optional bearer token comes from $JAEGER_TOKEN for
-// secured deployments; local Jaeger needs none.
+// deterministic cap). An optional bearer token for secured deployments comes
+// from $JAEGER_TOKEN, else params "token_func"/"token_command" (see
+// source.Credential); local Jaeger needs none.
 func New(params map[string]any) (source.Connector, error) {
+	token, err := source.NewCredential("jaeger", "token", params, "", source.EnvFirst("JAEGER_TOKEN"))
+	if err != nil {
+		return nil, err
+	}
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
 		// (a no-op until a tracer provider is installed).
@@ -62,39 +66,15 @@ func New(params map[string]any) (source.Connector, error) {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		baseURL: defaultBaseURL,
-		token:   firstEnv("JAEGER_TOKEN"),
+		token:   token,
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
-	if n, ok := intParam(params["max_traces"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["max_traces"]); ok && n > 0 {
 		c.maxTraces = n
 	}
 	return c, nil
-}
-
-// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
-// int64, or float64).
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
-}
-
-func firstEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // Tables returns the schemas of the jaeger.* tables.
@@ -108,6 +88,9 @@ func (c *Connector) Tables() []source.TableSchema {
 
 // Scan dispatches to the per-table fetchers.
 func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	if _, err := c.token.Get(ctx); err != nil {
+		return err
+	}
 	switch req.Table {
 	case "spans":
 		return c.scanSpans(ctx, req, emit)
@@ -131,8 +114,9 @@ func (c *Connector) get(ctx context.Context, rawurl string) (*http.Response, err
 		return nil, fmt.Errorf("jaeger: GET %s: %w", rawurl, err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	// Cached after the resolution in Scan; the error surfaced there.
+	if tok, _ := c.token.Get(ctx); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := c.client.Do(req)

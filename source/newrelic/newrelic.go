@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -56,7 +55,7 @@ const (
 type Connector struct {
 	client      *http.Client
 	baseURL     string
-	apiKey      string
+	apiKey      *source.Credential
 	account     int64
 	maxRows     int // cap on an un-pushable-LIMIT NRDB scan; <= nrqlHardCap
 	nrqlTimeout int // seconds
@@ -75,18 +74,24 @@ type tableInfo struct {
 }
 
 // New builds a New Relic connector. Required: params["account_id"], and a User
-// API key from $DFETCH_NEWRELIC_API_KEY or $NEW_RELIC_API_KEY — the key is
-// checked only when a newrelic table is actually used, so a config that
+// API key from $DFETCH_NEWRELIC_API_KEY or $NEW_RELIC_API_KEY, else params
+// "api_key_func"/"api_key_command" (see source.Credential) — the key is
+// resolved only when a newrelic table is actually used, so a config that
 // declares this source doesn't break unrelated dfetch commands for people
-// without the env var. Optional params: "region" ("US" default, "EU"),
+// without a key. Optional params: "region" ("US" default, "EU"),
 // "base_url" (overrides region; used by tests), "max_rows" (cap on
 // un-pushable-LIMIT scans; default and max 5000, the NRQL hard cap),
 // "nrql_timeout" (seconds, default 70, max 120). It is config-only —
 // registered for `type: newrelic`, never auto-instantiated.
 func New(params map[string]any) (source.Connector, error) {
-	account, ok := intParam(params["account_id"])
+	account, ok := source.IntParam(params["account_id"])
 	if !ok || account <= 0 {
 		return nil, fmt.Errorf("newrelic: params.account_id is required (your New Relic account id)")
+	}
+	apiKey, err := source.NewCredential("newrelic", "api_key", params, "",
+		source.EnvFirst("DFETCH_NEWRELIC_API_KEY", "NEW_RELIC_API_KEY"))
+	if err != nil {
+		return nil, err
 	}
 
 	c := &Connector{
@@ -96,7 +101,7 @@ func New(params map[string]any) (source.Connector, error) {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		baseURL:     defaultBaseURL,
-		apiKey:      firstEnv("DFETCH_NEWRELIC_API_KEY", "NEW_RELIC_API_KEY"),
+		apiKey:      apiKey,
 		account:     int64(account),
 		maxRows:     nrqlHardCap,
 		nrqlTimeout: defaultNRQLTimeout,
@@ -108,40 +113,16 @@ func New(params map[string]any) (source.Connector, error) {
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
 	}
-	if n, ok := intParam(params["max_rows"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["max_rows"]); ok && n > 0 {
 		c.maxRows = min(n, nrqlHardCap)
 	}
-	if n, ok := intParam(params["nrql_timeout"]); ok && n > 0 {
+	if n, ok := source.IntParam(params["nrql_timeout"]); ok && n > 0 {
 		c.nrqlTimeout = min(n, 120)
 	}
 	// The HTTP timeout must outlast the server-side NRQL timeout, or a slow
 	// query gets killed client-side before NerdGraph can answer.
 	c.client.Timeout = time.Duration(c.nrqlTimeout+30) * time.Second
 	return c, nil
-}
-
-func firstEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// intParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
-// int64, or float64).
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
 }
 
 // --- GraphQL client ---
@@ -171,8 +152,12 @@ func (c *Connector) gqlPost(ctx context.Context, query string, variables map[str
 	// Every NerdGraph request funnels through here, so this is where the
 	// deferred key requirement bites: construction never needs the key, only
 	// actually using a newrelic table does.
-	if c.apiKey == "" {
-		return fmt.Errorf("newrelic: no API key; set $NEW_RELIC_API_KEY to a User API key (NerdGraph does not accept the ingest license key)")
+	apiKey, err := c.apiKey.Get(ctx)
+	if err != nil {
+		return err
+	}
+	if apiKey == "" {
+		return fmt.Errorf("newrelic: no API key; set $NEW_RELIC_API_KEY to a User API key (NerdGraph does not accept the ingest license key), or params.api_key_func, or params.api_key_command")
 	}
 	spanName, queryText := "newrelic.graphql", query
 	if nrql, ok := variables["nrql"].(string); ok {
@@ -203,7 +188,7 @@ func (c *Connector) gqlPost(ctx context.Context, query string, variables map[str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("API-Key", c.apiKey)
+	req.Header.Set("API-Key", apiKey)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -31,9 +30,17 @@ const (
 
 // Connector queries one schema of a PostgreSQL database.
 type Connector struct {
-	db      *sql.DB
+	dsn     *source.Credential
 	schema  string
 	maxRows int
+
+	// The pool opens lazily on first use: the DSN may come from a
+	// dsn_func/dsn_command that must not run for queries that never touch this
+	// source, and a misconfigured source shouldn't fail unrelated commands.
+	// Only a successful open is cached (guarded by dbMu) — a transient DSN or
+	// open failure is returned to that caller and retried on the next use.
+	dbMu sync.Mutex
+	db   *sql.DB
 
 	// colCache memoizes information_schema.columns lookups so a single query
 	// doesn't pay two round-trips (the engine's DescribeTable at planning time
@@ -44,18 +51,45 @@ type Connector struct {
 }
 
 // New builds a Postgres connector. The DSN comes from params["dsn"], else
-// $DFETCH_POSTGRES_DSN or $DATABASE_URL (a missing DSN is an error — this
-// connector is only built from config). Other params: "schema" (default
-// "public") and "max_rows" (cap on an un-pushable-LIMIT scan; default 100000).
+// $DFETCH_POSTGRES_DSN or $DATABASE_URL, else params "dsn_func"/"dsn_command"
+// (see source.Credential); it is resolved — and the pool opened — on first
+// use, so a missing DSN errors when a postgres table is queried, not at
+// construction. Other params: "schema" (default "public") and "max_rows" (cap
+// on an un-pushable-LIMIT scan; default 100000). It is config-only —
+// registered for `type: postgres`, never auto-instantiated.
 func New(params map[string]any) (source.Connector, error) {
-	dsn := firstEnv("DFETCH_POSTGRES_DSN", "DATABASE_URL")
-	if v, ok := params["dsn"].(string); ok && v != "" {
-		dsn = v
-	}
-	if dsn == "" {
-		return nil, fmt.Errorf("postgres: no DSN configured; set params.dsn or $DFETCH_POSTGRES_DSN")
+	dsn, err := source.NewCredential("postgres", "dsn", params, "dsn",
+		source.EnvFirst("DFETCH_POSTGRES_DSN", "DATABASE_URL"))
+	if err != nil {
+		return nil, err
 	}
 
+	c := &Connector{dsn: dsn, schema: defaultSchema, maxRows: defaultMaxRows, colCache: map[string][]columnInfo{}}
+	if s, ok := params["schema"].(string); ok && s != "" {
+		c.schema = s
+	}
+	if n, ok := source.IntParam(params["max_rows"]); ok && n > 0 {
+		c.maxRows = n
+	}
+	return c, nil
+}
+
+// getDB resolves the DSN and opens the pool on first successful use; only
+// success is cached, so a transient failure doesn't disable the source for
+// the process lifetime.
+func (c *Connector) getDB(ctx context.Context) (*sql.DB, error) {
+	c.dbMu.Lock()
+	defer c.dbMu.Unlock()
+	if c.db != nil {
+		return c.db, nil
+	}
+	dsn, err := c.dsn.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dsn == "" {
+		return nil, fmt.Errorf("postgres: no DSN configured; set params.dsn, $DFETCH_POSTGRES_DSN, params.dsn_func, or params.dsn_command")
+	}
 	// otelsql wraps the pgx driver so each statement becomes a span (a no-op
 	// until a tracer provider is installed) — same as localdb.
 	db, err := otelsql.Open("pgx", dsn,
@@ -63,37 +97,8 @@ func New(params map[string]any) (source.Connector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres: opening database: %w", err)
 	}
-
-	c := &Connector{db: db, schema: defaultSchema, maxRows: defaultMaxRows, colCache: map[string][]columnInfo{}}
-	if s, ok := params["schema"].(string); ok && s != "" {
-		c.schema = s
-	}
-	if n, ok := intParam(params["max_rows"]); ok && n > 0 {
-		c.maxRows = n
-	}
-	return c, nil
-}
-
-func firstEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func intParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
+	c.db = db
+	return c.db, nil
 }
 
 // Tables returns nil: tables are discovered on demand (ListTables/DescribeTable).
@@ -114,7 +119,11 @@ func (c *Connector) ListTables(ctx context.Context, opts source.ListOptions) ([]
 		q += fmt.Sprintf(` LIMIT %d`, opts.Limit) //nolint:gosec // G202: LIMIT is an int, not a user-controlled string
 	}
 
-	rows, err := c.db.QueryContext(ctx, q, args...)
+	db, err := c.getDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: listing tables in %q: %w", c.schema, err)
 	}
@@ -174,7 +183,11 @@ func (c *Connector) columnInfos(ctx context.Context, table string) ([]columnInfo
 func (c *Connector) fetchColumnInfos(ctx context.Context, table string) ([]columnInfo, error) {
 	const q = `SELECT column_name, data_type FROM information_schema.columns
 	           WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`
-	rows, err := c.db.QueryContext(ctx, q, c.schema, table)
+	db, err := c.getDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, c.schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: describing %s.%s: %w", c.schema, table, err)
 	}
@@ -219,7 +232,11 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 	}
 
 	query, args, capped := buildSelect(c.schema, req, colType, c.maxRows)
-	rows, err := c.db.QueryContext(ctx, query, args...)
+	db, err := c.getDB(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("postgres: scanning %s.%s: %w", c.schema, req.Table, err)
 	}

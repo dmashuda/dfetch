@@ -117,6 +117,30 @@ func TestNewValidation(t *testing.T) {
 	assert.Equal(t, 150*time.Second, c.(*Connector).client.Timeout)
 }
 
+// api_key_command supplies the key when the env vars are unset (the new
+// command hatch); it is resolved lazily and sent as the API-Key header.
+func TestAPIKeyFromCommand(t *testing.T) {
+	t.Setenv("DFETCH_NEWRELIC_API_KEY", "")
+	t.Setenv("NEW_RELIC_API_KEY", "")
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("API-Key")
+		nrqlResults(w, `[{"eventType":"Transaction"}]`)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"account_id":      1,
+		"base_url":        srv.URL,
+		"api_key_command": []any{"printf", "key-from-cmd"},
+	})
+	require.NoError(t, err)
+
+	_, err = c.(*Connector).ListTables(context.Background(), source.ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "key-from-cmd", gotKey)
+}
+
 // A missing API key must not break construction (a committed config would
 // otherwise fail every dfetch command for people without the env var); the
 // helpful error surfaces only when a newrelic table is actually used.

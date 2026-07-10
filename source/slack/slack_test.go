@@ -384,6 +384,26 @@ func TestAuthHeaderCommand(t *testing.T) {
 	assert.Equal(t, "Bearer xoxb-from-cmd", gotAuth)
 }
 
+// A programmatic config can supply the header via a Go func (auth_header_func).
+func TestAuthHeaderFunc(t *testing.T) {
+	t.Setenv("SLACK_TOKEN", "")
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"base_url":         srv.URL,
+		"auth_header_func": func(context.Context) (string, error) { return "Bearer xoxb-from-func", nil },
+	})
+	require.NoError(t, err)
+	_, err = collectScan(c, source.ScanRequest{Table: "channels"})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer xoxb-from-func", gotAuth)
+}
+
 // $SLACK_TOKEN is sent as a Bearer header.
 func TestSlackTokenEnv(t *testing.T) {
 	t.Setenv("SLACK_TOKEN", "xoxb-env")

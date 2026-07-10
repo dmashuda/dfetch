@@ -15,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -50,16 +49,22 @@ type Connector struct {
 	client     *http.Client
 	baseURL    string
 	actionPath string
-	apiKey     string
+	apiKey     *source.Credential
 }
 
 // New builds a CKAN connector. Supported params: "base_url" (override the portal
 // host; defaults to https://catalog-old.data.gov, also used by tests),
 // "action_path" (the Action API prefix; defaults to "/api/3/action", set to
 // "/v3/action" for the api.gsa.gov gateway), and "api_key" (sent as the api_key
-// query parameter the gateway requires; falls back to $CKAN_API_KEY). Public
+// query parameter the gateway requires; falls back to $CKAN_API_KEY, else
+// params "api_key_func"/"api_key_command" — see source.Credential). Public
 // CKAN reads need no key.
 func New(params map[string]any) (source.Connector, error) {
+	apiKey, err := source.NewCredential("ckan", "api_key", params, "api_key",
+		source.EnvFirst("CKAN_API_KEY"))
+	if err != nil {
+		return nil, err
+	}
 	c := &Connector{
 		// otelhttp.NewTransport adds an OpenTelemetry client span per request
 		// (a no-op until a tracer provider is installed).
@@ -69,7 +74,7 @@ func New(params map[string]any) (source.Connector, error) {
 		},
 		baseURL:    defaultBaseURL,
 		actionPath: defaultActionPath,
-		apiKey:     firstEnv("CKAN_API_KEY"),
+		apiKey:     apiKey,
 	}
 	if bu, ok := params["base_url"].(string); ok && bu != "" {
 		c.baseURL = strings.TrimSuffix(bu, "/")
@@ -77,28 +82,17 @@ func New(params map[string]any) (source.Connector, error) {
 	if ap, ok := params["action_path"].(string); ok && ap != "" {
 		c.actionPath = "/" + strings.Trim(ap, "/")
 	}
-	if k, ok := params["api_key"].(string); ok && k != "" {
-		c.apiKey = k
-	}
 	return c, nil
 }
 
 // actionURL builds the URL for a CKAN action, folding in the api_key query
 // parameter when one is configured (the api.gsa.gov gateway requires it).
-func (c *Connector) actionURL(action string, q url.Values) string {
-	if c.apiKey != "" {
-		q.Set("api_key", c.apiKey)
+func (c *Connector) actionURL(ctx context.Context, action string, q url.Values) string {
+	// Cached after the resolution in Scan; the error surfaced there.
+	if key, _ := c.apiKey.Get(ctx); key != "" {
+		q.Set("api_key", key)
 	}
 	return c.baseURL + c.actionPath + "/" + action + "?" + q.Encode()
-}
-
-func firstEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // Tables returns the schemas of the datagov.* tables.
@@ -113,6 +107,9 @@ func (c *Connector) Tables() []source.TableSchema {
 
 // Scan dispatches to the per-table fetchers, which emit one chunk per API page.
 func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
+	if _, err := c.apiKey.Get(ctx); err != nil {
+		return err
+	}
 	switch req.Table {
 	case "datasets":
 		return c.scanDatasets(ctx, req, emit)

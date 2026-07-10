@@ -18,11 +18,38 @@ func intPtr(n int) *int { return &n }
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
+	// Clear ambient credentials so a developer's real token never reaches the
+	// test server (env wins over every other credential source).
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c, err := New(map[string]any{"base_url": srv.URL, "token_command": []any{}})
 	require.NoError(t, err)
 	return c.(*Connector)
+}
+
+// A programmatic config can supply the token via a Go func (token_func); it is
+// resolved lazily at Scan and sent as a Bearer credential.
+func TestTokenFromFunc(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(map[string]any{
+		"base_url":   srv.URL,
+		"token_func": func(context.Context) (string, error) { return "tok-from-func", nil },
+	})
+	require.NoError(t, err)
+
+	_, err = collectScan(c, source.ScanRequest{Table: "repos", Filters: []source.Filter{eqFilter("owner", "golang")}})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer tok-from-func", gotAuth)
 }
 
 func eqFilter(col, val string) source.Filter {

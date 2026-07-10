@@ -1,11 +1,13 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/dmashuda/dfetch/source"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func intPtr(n int) *int { return &n }
@@ -155,11 +157,40 @@ func TestNormalizeTimestampOrderIsLexical(t *testing.T) {
 	assert.Less(t, b, c)
 }
 
-func TestNewRequiresDSN(t *testing.T) {
+// The DSN is resolved lazily: construction succeeds without one so a
+// misconfigured source doesn't break unrelated commands, and the documented
+// error surfaces on first use of a postgres table.
+func TestMissingDSNErrorsOnFirstUse(t *testing.T) {
 	t.Setenv("DFETCH_POSTGRES_DSN", "")
 	t.Setenv("DATABASE_URL", "")
-	_, err := New(map[string]any{})
-	assert.Error(t, err)
+	c, err := New(map[string]any{})
+	require.NoError(t, err)
+
+	_, _, err = c.(*Connector).DescribeTable(context.Background(), "orders")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "postgres: no DSN configured")
+	assert.Contains(t, err.Error(), "dsn_command")
+}
+
+// A programmatic config can supply the DSN via a Go func (dsn_func), resolved
+// on first use.
+func TestDSNFromFunc(t *testing.T) {
+	t.Setenv("DFETCH_POSTGRES_DSN", "")
+	t.Setenv("DATABASE_URL", "")
+	called := false
+	c, err := New(map[string]any{
+		"dsn_func": func(context.Context) (string, error) {
+			called = true
+			return "postgres://from-func/db", nil
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, called, "dsn_func must not run at construction")
+
+	dsn, err := c.(*Connector).dsn.Get(context.Background())
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "postgres://from-func/db", dsn)
 }
 
 func TestNewUsesParamsAndEnv(t *testing.T) {

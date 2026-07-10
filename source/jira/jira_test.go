@@ -105,35 +105,58 @@ func TestAuthHeaderFromEnv(t *testing.T) {
 	c, err := New(map[string]any{"base_url": "https://x.atlassian.net"})
 	require.NoError(t, err)
 
-	h, err := c.(*Connector).getAuthHeader(context.Background())
+	h, err := c.(*Connector).authHeader.Get(context.Background())
 	require.NoError(t, err)
 	assert.True(t, len(h) > len("Basic "))
 	assert.Contains(t, h, "Basic ")
 }
 
 func TestAuthHeaderFromCommand(t *testing.T) {
+	// Clear ambient credentials: env wins over the command, so a developer's
+	// real $JIRA_EMAIL/$JIRA_API_TOKEN would shadow the command under test.
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
 	c, err := New(map[string]any{
 		"base_url":            "https://x.atlassian.net",
 		"auth_header_command": []any{"echo", "Bearer from-command"},
 	})
 	require.NoError(t, err)
 
-	h, err := c.(*Connector).getAuthHeader(context.Background())
+	h, err := c.(*Connector).authHeader.Get(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer from-command", h)
 }
 
+// A programmatic config can supply the header via a Go func (auth_header_func).
+func TestAuthHeaderFromFunc(t *testing.T) {
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
+	c, err := New(map[string]any{
+		"base_url":         "https://x.atlassian.net",
+		"auth_header_func": func(context.Context) (string, error) { return "Bearer from-func", nil },
+	})
+	require.NoError(t, err)
+
+	h, err := c.(*Connector).authHeader.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer from-func", h)
+}
+
 func TestAuthHeaderNoneConfigured(t *testing.T) {
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
 	c, err := New(map[string]any{"base_url": "https://x.atlassian.net"})
 	require.NoError(t, err)
-	h, err := c.(*Connector).getAuthHeader(context.Background())
+	h, err := c.(*Connector).authHeader.Get(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, h)
 }
 
-// Fix: the engine Scans jira tables concurrently, so getAuthHeader must be
-// race-free — every path goes through authOnce (run with -race).
+// Fix: the engine Scans jira tables concurrently, so credential resolution must
+// be race-free — every path goes through the Credential's Once (run with -race).
 func TestGetAuthHeaderConcurrent(t *testing.T) {
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
 	c, err := New(map[string]any{
 		"base_url":            "https://x.atlassian.net",
 		"auth_header_command": []any{"echo", "Bearer from-command"},
@@ -145,7 +168,7 @@ func TestGetAuthHeaderConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h, err := c.(*Connector).getAuthHeader(context.Background())
+			h, err := c.(*Connector).authHeader.Get(context.Background())
 			assert.NoError(t, err)
 			assert.Equal(t, "Bearer from-command", h)
 		}()

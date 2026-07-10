@@ -17,6 +17,9 @@ import (
 // newTestConnectorWith builds a connector against a test server with extra params.
 func newTestConnectorWith(t *testing.T, params map[string]any, h http.HandlerFunc) *Connector {
 	t.Helper()
+	// Clear the ambient token so a developer's real credential never reaches
+	// the test server (env wins over every other credential source).
+	t.Setenv("JAEGER_TOKEN", "")
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	params["base_url"] = srv.URL
@@ -27,11 +30,22 @@ func newTestConnectorWith(t *testing.T, params map[string]any, h http.HandlerFun
 
 func newTestConnector(t *testing.T, h http.HandlerFunc) *Connector {
 	t.Helper()
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-	c, err := New(map[string]any{"base_url": srv.URL})
+	return newTestConnectorWith(t, map[string]any{}, h)
+}
+
+// token_command output is sent as a Bearer credential (the new command hatch).
+func TestTokenFromCommand(t *testing.T) {
+	var gotAuth string
+	c := newTestConnectorWith(t,
+		map[string]any{"token_command": []any{"printf", "tok-from-cmd"}},
+		func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			_, _ = w.Write([]byte(`{"services":[]}`))
+		})
+
+	err := c.Scan(context.Background(), source.ScanRequest{Table: "services"}, func(*source.Rows) error { return nil })
 	require.NoError(t, err)
-	return c.(*Connector)
+	assert.Equal(t, "Bearer tok-from-cmd", gotAuth)
 }
 
 func eqFilter(col, val string) source.Filter {

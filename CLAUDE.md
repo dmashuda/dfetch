@@ -21,10 +21,10 @@ source/github           GitHub connector (issues/pulls/repos/commits/releases/wo
 source/jaeger           Jaeger connector (spans/services/operations), api_v3
 source/ckan             CKAN/data.gov connector (datasets/resources/organizations/groups), Action API
 source/docker           Docker connector (containers/images/volumes/networks), Engine API over the local unix socket, stdlib net/http
-source/slack            Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_command (full Cookie header, verbatim)
+source/slack            Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_func/auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_func/cookie_command (full Cookie header, verbatim)
 source/newrelic         New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
 source/postgres         Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only
-source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_command (full header, verbatim)
+source/jira             Jira Cloud connector (issues via JQL push-down, projects, comments), REST v3, config-only; auth via $JIRA_EMAIL + $JIRA_API_TOKEN (Basic) or params.auth_header_func/auth_header_command (full header, verbatim)
 connectors              default connector set (Builtins/ConfigOnly/DefaultRegistry/DefaultOptions); engine never imports it
 internal/sqlparse       SQL parse/validate + typed AST (incl. ORDER BY/LIMIT) (ANTLR)
 localdb                 per-request local SQLite database (mattn/go-sqlite3, cgo); default engine.DB implementation
@@ -98,6 +98,16 @@ code in those layers should keep `context` threaded so spans nest correctly.
 
 ## Conventions
 
+- **Credentials:** connector secrets resolve via `source.Credential`
+  (`source/credential.go`) with fixed precedence: plain param > env var >
+  `<x>_func` (Go func, programmatic config only) > `<x>_command` (argv, no
+  shell). Resolution is lazy (first use, never at construction) and race-safe;
+  success is cached for the connector's lifetime, failures are retried on the
+  next use. New connectors build one with `source.NewCredential` and resolve
+  on first use — typically `Get` at the top of `Scan`; a dynamic connector may
+  defer to its request/DB layer instead (newrelic's `gqlPost`, postgres's
+  `getDB`). Auth tests must clear the relevant env vars with `t.Setenv` (env
+  wins, so ambient credentials shadow the source under test).
 - **Testing:** use [testify](https://github.com/stretchr/testify) — `require` for
   fatal assertions, `assert` for non-fatal. Do not write bare
   `if got != want { t.Fatalf(...) }` checks in new tests.

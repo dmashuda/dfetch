@@ -46,13 +46,17 @@ func TestIntegrationDiscoverAndScan(t *testing.T) {
 	c := testConnector(t)
 	ctx := context.Background()
 
-	_, err := c.db.ExecContext(ctx, `DROP TABLE IF EXISTS dfetch_orders`)
+	// The pool opens lazily; get the handle the connector will use.
+	db, err := c.getDB(ctx)
 	require.NoError(t, err)
-	_, err = c.db.ExecContext(ctx, `CREATE TABLE dfetch_orders (
+
+	_, err = db.ExecContext(ctx, `DROP TABLE IF EXISTS dfetch_orders`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE TABLE dfetch_orders (
 		id integer PRIMARY KEY, status text, total numeric, created_at timestamptz)`)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = c.db.ExecContext(ctx, `DROP TABLE dfetch_orders`) })
-	_, err = c.db.ExecContext(ctx, `INSERT INTO dfetch_orders VALUES
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, `DROP TABLE dfetch_orders`) })
+	_, err = db.ExecContext(ctx, `INSERT INTO dfetch_orders VALUES
 		(1,'paid',  10.0,'2026-01-01T00:00:00Z'),
 		(2,'paid',  20.0,'2026-03-01T00:00:00Z'),
 		(3,'open',  30.0,'2026-02-01T00:00:00Z')`)

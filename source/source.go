@@ -183,6 +183,22 @@ func (r *Registry) Build(typeName string, params map[string]any) (Connector, err
 	return f(params)
 }
 
+// IntParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
+// int64, or float64). The second result is false when the value is absent or
+// not numeric.
+func IntParam(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
 // StringList reads params[key] as a list of strings, tolerating the shapes YAML
 // produces: a []string, a []any of strings, or a single string. It returns nil
 // when the key is absent or not string-like. Dynamic connectors use it for the
