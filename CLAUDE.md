@@ -43,7 +43,7 @@ Everything outside `internal/` is public library API: `engine` (options-based
 the `connectors` package holds dfetch's stock set, and the CLI composes
 `connectors.DefaultOptions()` + `engine.WithConfig(cfg)` in `cmd/engine.go`.
 Adding a builtin means editing `connectors/connectors.go`, not the engine. See
-the "Use as a library" section of README.md.
+`library.md`.
 
 ## How a query runs
 

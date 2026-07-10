@@ -308,7 +308,7 @@ registration of a schema name wins — so config overrides a builtin.
 `source.Connector` and registers an instance directly with
 `engine.WithConnector("name", conn)`, or registers a `source.Factory` in its own
 `source.Registry` and declares typed sources via `engine.WithSources`/
-`engine.WithConfig`. See the "Use as a library" section of the root README.
+`engine.WithConfig`. See [library.md](../library.md) at the repo root.
 
 **Params and secrets:** read structured options from `params` (type-assert, e.g.
 `params["base_url"].(string)`). Secrets go through `source.Credential` — the
