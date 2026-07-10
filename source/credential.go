@@ -13,8 +13,9 @@ import (
 
 // CredentialFunc lazily supplies a credential value — a token, a header value,
 // or a DSN. Passed through params (e.g. params["token_func"]) by programs that
-// build their config in Go; YAML config cannot express it.
-type CredentialFunc func(ctx context.Context) (string, error)
+// build their config in Go; YAML config cannot express it. It is an alias, so
+// a bare func literal in a params map satisfies it without conversion.
+type CredentialFunc = func(ctx context.Context) (string, error)
 
 // Credential resolves one connector secret lazily, once, race-safely, from up
 // to four sources with fixed precedence:
@@ -24,7 +25,7 @@ type CredentialFunc func(ctx context.Context) (string, error)
 //     construction),
 //  3. a caller-supplied Go function (params["<name>_func"]),
 //  4. an executed command (params["<name>_command"] — an argv list run
-//     directly without a shell, 5s timeout, stdout's trailing newline
+//     directly without a shell, 5s timeout, stdout's trailing CR/LF
 //     trimmed).
 //
 // Connectors are built eagerly for every query (engine.New), so resolution is
@@ -40,7 +41,10 @@ type CredentialFunc func(ctx context.Context) (string, error)
 //
 // An empty value with a nil error means nothing is configured (or the env
 // var is unset); each connector decides whether that is an error or an
-// unauthenticated request.
+// unauthenticated request. A configured func or command that yields an empty
+// value is an error, not an empty credential — silently proceeding
+// unauthenticated would mask a broken secrets source — and like any failure
+// it is retried on the next Get rather than cached.
 type Credential struct {
 	name   string        // param base name, e.g. "token", "auth_header" — labels errors
 	static string        // params[staticKey] when the connector declares a static param
@@ -70,13 +74,7 @@ func NewCredential(connector, name string, params map[string]any, staticKey stri
 	if raw, ok := params[name+"_func"]; ok {
 		fn, ok := raw.(CredentialFunc)
 		if !ok {
-			// Also accept the underlying func type, so callers don't have to
-			// convert to the named type explicitly.
-			plain, okPlain := raw.(func(context.Context) (string, error))
-			if !okPlain {
-				return nil, fmt.Errorf("%s: %s_func must be a func(context.Context) (string, error)", connector, name)
-			}
-			fn = plain
+			return nil, fmt.Errorf("%s: %s_func must be a func(context.Context) (string, error) (programmatic config only; use %s_command in YAML)", connector, name, name)
 		}
 		c.fn = fn
 	}
@@ -120,28 +118,26 @@ func (c *Credential) resolve(ctx context.Context) (string, error) {
 		}
 	}
 	if c.fn != nil {
-		return c.fn(ctx)
+		v, err := c.fn(ctx)
+		if err != nil {
+			return "", err
+		}
+		if v == "" {
+			return "", fmt.Errorf("%s_func returned an empty value", c.name)
+		}
+		return v, nil
 	}
 	if len(c.cmd) > 0 {
-		return runCommand(ctx, c.name+"_command", c.cmd)
+		v, err := runCommand(ctx, c.name+"_command", c.cmd)
+		if err != nil {
+			return "", err
+		}
+		if v == "" {
+			return "", fmt.Errorf("%s_command %q produced no output", c.name, c.cmd)
+		}
+		return v, nil
 	}
 	return "", nil
-}
-
-// IntParam coerces a YAML/JSON numeric param to int (YAML may decode as int,
-// int64, or float64). The second result is false when the value is absent or
-// not numeric.
-func IntParam(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	default:
-		return 0, false
-	}
 }
 
 // EnvFirst returns a closure over the environment that yields the first
@@ -159,8 +155,9 @@ func EnvFirst(vars ...string) func() string {
 	}
 }
 
-// runCommand runs cmd and returns its stdout (trailing newline trimmed). name
-// labels the param in errors (e.g. "auth_header_command").
+// runCommand runs cmd and returns its stdout (trailing CR/LF trimmed — a
+// credential ending in a bare \r would be rejected as an HTTP header value).
+// name labels the param in errors (e.g. "auth_header_command").
 func runCommand(ctx context.Context, name string, cmd []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -169,14 +166,14 @@ func runCommand(ctx context.Context, name string, cmd []string) (string, error) 
 	out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).Output()
 	if err != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			stderr := strings.TrimRight(string(ee.Stderr), "\n")
+			stderr := strings.TrimRight(string(ee.Stderr), "\r\n")
 			if stderr != "" {
 				return "", fmt.Errorf("%s %q: %w: %s", name, cmd, err, stderr)
 			}
 		}
 		return "", fmt.Errorf("%s %q: %w", name, cmd, err)
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return strings.TrimRight(string(out), "\r\n"), nil
 }
 
 // stringListParam reads a param as a non-empty list of non-empty strings,

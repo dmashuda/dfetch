@@ -22,7 +22,7 @@ func mustCredential(t *testing.T, name string, params map[string]any, staticKey 
 // shadowing everything below it.
 func TestCredentialPrecedence(t *testing.T) {
 	ctx := context.Background()
-	fn := CredentialFunc(func(context.Context) (string, error) { return "from-func", nil })
+	fn := func(context.Context) (string, error) { return "from-func", nil }
 	params := map[string]any{
 		"token":         "from-static",
 		"token_func":    fn,
@@ -63,7 +63,7 @@ func TestCredentialPrecedence(t *testing.T) {
 }
 
 // A bare func(context.Context) (string, error) is accepted without converting
-// to the named CredentialFunc type.
+// to CredentialFunc (an alias, so both spellings are the same type).
 func TestCredentialFuncPlainType(t *testing.T) {
 	params := map[string]any{
 		"token_func": func(context.Context) (string, error) { return "plain", nil },
@@ -108,10 +108,10 @@ func TestCredentialEmptyCommandList(t *testing.T) {
 func TestCredentialLazyAndCached(t *testing.T) {
 	var calls atomic.Int32
 	params := map[string]any{
-		"token_func": CredentialFunc(func(context.Context) (string, error) {
+		"token_func": func(context.Context) (string, error) {
 			calls.Add(1)
 			return "v", nil
-		}),
+		},
 	}
 	c := mustCredential(t, "token", params, "", nil)
 	assert.Equal(t, int32(0), calls.Load(), "must not resolve at construction")
@@ -129,12 +129,12 @@ func TestCredentialLazyAndCached(t *testing.T) {
 func TestCredentialErrorRetried(t *testing.T) {
 	var calls atomic.Int32
 	params := map[string]any{
-		"token_func": CredentialFunc(func(context.Context) (string, error) {
+		"token_func": func(context.Context) (string, error) {
 			if calls.Add(1) == 1 {
 				return "", errors.New("transient secrets-manager blip")
 			}
 			return "recovered", nil
-		}),
+		},
 	}
 	c := mustCredential(t, "token", params, "", nil)
 
@@ -152,16 +152,59 @@ func TestCredentialErrorRetried(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
+// A configured func that yields an empty value is an error, not a cached
+// empty credential: the next Get retries, so a secrets store that is briefly
+// empty doesn't poison the process.
+func TestCredentialEmptyFuncRetried(t *testing.T) {
+	var calls atomic.Int32
+	params := map[string]any{
+		"token_func": func(context.Context) (string, error) {
+			if calls.Add(1) == 1 {
+				return "", nil // store not yet populated
+			}
+			return "populated", nil
+		},
+	}
+	c := mustCredential(t, "token", params, "", nil)
+
+	_, err := c.Get(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_func returned an empty value")
+
+	v, err := c.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "populated", v)
+}
+
+// Likewise for a command that produces no output.
+func TestCredentialEmptyCommandOutput(t *testing.T) {
+	c := mustCredential(t, "token", map[string]any{"token_command": []any{"true"}}, "", nil)
+	_, err := c.Get(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_command")
+	assert.Contains(t, err.Error(), "produced no output")
+}
+
+// CRLF-terminated command output (e.g. from a Windows-built helper) must not
+// leave a trailing \r — net/http rejects header values containing one.
+func TestCredentialCommandTrimsCRLF(t *testing.T) {
+	c := mustCredential(t, "token",
+		map[string]any{"token_command": []any{"printf", `Bearer tok\r\n`}}, "", nil)
+	v, err := c.Get(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer tok", v)
+}
+
 // A cancellation inherited from the first caller's ctx (e.g. a sibling scan's
 // error canceling the errgroup) doesn't latch: the next query resolves fine.
 func TestCredentialCanceledFirstCallRetries(t *testing.T) {
 	params := map[string]any{
-		"token_func": CredentialFunc(func(ctx context.Context) (string, error) {
+		"token_func": func(ctx context.Context) (string, error) {
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
 			return "ok", nil
-		}),
+		},
 	}
 	c := mustCredential(t, "token", params, "", nil)
 
