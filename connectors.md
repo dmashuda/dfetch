@@ -1,6 +1,6 @@
 # Connectors
 
-Four connectors are built in and need no configuration. To point one at a
+Six connectors are built in and need no configuration. To point one at a
 non-default host (e.g. an enterprise or remote instance), or to register the same
 connector under several schemas, see [Configuration](README.md#configuration).
 
@@ -301,6 +301,76 @@ the Cookie header). Same lazy resolution and precedence as the auth header.
 
 `slack.search` requires a **user token** (`xoxp-…`); bot tokens (`xoxb-…`) cannot
 call `search.messages` and the API returns `not_allowed_token_type`.
+
+## Local files — schema `files`
+
+Serves data files on disk — CSV, TSV, JSON, and JSONL/NDJSON — as tables, so
+ad-hoc data can be trimmed, aggregated, and joined against every other source
+with plain SQL. It is a dynamic source: the **table name is the file's path**
+relative to the working directory, quoted as a SQL identifier:
+
+```sql
+SELECT * FROM files."data/orders.csv" LIMIT 10
+```
+
+| format          | file becomes a table of                                            |
+| --------------- | ------------------------------------------------------------------ |
+| `.csv` / `.tsv` | records under the header row (the header names the columns)        |
+| `.json`         | the objects of a top-level JSON array (keys become columns)        |
+| `.jsonl` / `.ndjson` | one object per line (keys become columns)                     |
+
+The schema is inferred from a sample of the first 1000 rows/objects: a column
+every sampled value fits as an integer is `INTEGER`, as a number `REAL`,
+otherwise `TEXT`. Identifier-like values are kept as text so they survive a
+`WHERE` unchanged — a leading zero (`01234`), a sign, or a non-finite float
+(`NaN`) keeps the column `TEXT`. A CSV column whose distinguishing value first
+appears after the sample may be typed from the sample alone; a JSON key that
+first appears past the sample is dropped from the schema, and the scan emits a
+warning naming it. JSON columns are the key union of the sampled objects in
+first-seen order; nested objects/arrays are stored as JSON text (query with
+`json_extract`). Empty CSV cells in numeric columns load as NULL; empty or
+duplicate header cells are renamed (`column_3`, `id_2`), case-insensitively
+(SQLite column names are). `dfetch tables files` walks the working directory for
+supported files (hidden and unreadable directories are skipped, and an
+unfiltered listing stops at 10000 files).
+
+There is no filter push-down — the file is the API — but a `LIMIT` (plus
+`OFFSET`) with no `WHERE`/`ORDER BY` stops reading early. Anything else reads
+the whole file, capped at `max_rows` (default 1000000) with a warning when the
+cap truncates.
+
+Table paths are confined to the root: absolute paths and `..` escapes are
+rejected. The builtin is rooted at the working directory; a config source can
+re-root it (and several sources can expose several directories):
+
+```yaml
+sources:
+  - name: exports
+    type: files
+    params:
+      root: /data/exports # queried as exports."2026-07/usage.csv"
+      max_rows: 5000000
+```
+
+```sh
+# peek at a CSV
+dfetch query 'SELECT * FROM files."data/orders.csv" LIMIT 10'
+
+# aggregate it
+dfetch query 'SELECT region, SUM(amount) AS total
+              FROM files."data/orders.csv"
+              GROUP BY region ORDER BY total DESC'
+
+# join local data against an API source
+dfetch query "SELECT i.number, i.title, t.priority
+              FROM files.\"triage.csv\" t
+              JOIN github.issues i ON i.number = t.number
+              WHERE i.owner='golang' AND i.repo='go'"
+
+# reach into nested JSON with json_extract
+dfetch query "SELECT json_extract(payload, '\$.status') AS status, COUNT(*) AS n
+              FROM files.\"events.jsonl\" GROUP BY status"
+```
 
 ## PostgreSQL — connector type `postgres`
 

@@ -13,6 +13,7 @@ import (
 	"github.com/dmashuda/dfetch/source"
 	"github.com/dmashuda/dfetch/source/ckan"
 	"github.com/dmashuda/dfetch/source/docker"
+	"github.com/dmashuda/dfetch/source/files"
 	"github.com/dmashuda/dfetch/source/github"
 	"github.com/dmashuda/dfetch/source/jaeger"
 	"github.com/dmashuda/dfetch/source/jira"
@@ -28,6 +29,7 @@ func Builtins() map[string]source.Factory {
 	return map[string]source.Factory{
 		"datagov": ckan.New,
 		"docker":  docker.New,
+		"files":   files.New,
 		"github":  github.New,
 		"jaeger":  jaeger.New,
 		"slack":   slack.New,
