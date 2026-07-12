@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -14,10 +15,13 @@ import (
 // newCSVReader builds the reader both describe and scan use. Records may be
 // ragged (FieldsPerRecord -1): scan pads/truncates each record to the declared
 // columns, so a stray short row degrades to NULLs instead of failing the query.
+// ReuseRecord is safe: callers copy out every cell they keep and never retain
+// the record slice.
 func newCSVReader(r io.Reader, comma rune) *csv.Reader {
 	cr := csv.NewReader(stripBOM(r))
 	cr.Comma = comma
 	cr.FieldsPerRecord = -1
+	cr.ReuseRecord = true
 	return cr
 }
 
@@ -58,7 +62,9 @@ func describeCSV(r io.Reader, comma rune) ([]source.Column, error) {
 
 // headerNames turns a header record into usable, unique column names: cells
 // are trimmed, an empty cell becomes column_<n> (1-based), and a duplicate
-// gets a _2/_3/… suffix.
+// gets a _2/_3/… suffix. Uniqueness is case-insensitive because SQLite column
+// names are — otherwise a header like "id,ID" would build a CREATE TABLE with a
+// duplicate column and fail every query.
 func headerNames(header []string) []string {
 	names := make([]string, len(header))
 	seen := make(map[string]bool, len(header))
@@ -68,13 +74,49 @@ func headerNames(header []string) []string {
 			h = fmt.Sprintf("column_%d", i+1)
 		}
 		name := h
-		for n := 2; seen[name]; n++ {
+		for n := 2; seen[strings.ToLower(name)]; n++ {
 			name = fmt.Sprintf("%s_%d", h, n)
 		}
-		seen[name] = true
+		seen[strings.ToLower(name)] = true
 		names[i] = name
 	}
 	return names
+}
+
+// parseSQLiteInt parses s as an int64 only when its canonical form round-trips,
+// so identifier-like values with a leading zero or sign ("01234", "+5") stay
+// TEXT and compare equal to the string as written rather than being rewritten.
+func parseSQLiteInt(s string) (int64, bool) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || strconv.FormatInt(n, 10) != s {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseSQLiteReal parses s as a float64, rejecting NaN/Inf (SQLite stores NaN
+// as NULL and has no infinity literal, so coercing them would corrupt the
+// value) and redundant-leading-zero forms ("01.5") that wouldn't round-trip.
+func parseSQLiteReal(s string) (float64, bool) {
+	if hasRedundantLeadingZero(s) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return 0, false
+	}
+	return f, true
+}
+
+// hasRedundantLeadingZero reports whether s (after an optional sign) begins with
+// a '0' followed by another digit — the shape of an identifier like a zip code,
+// not a canonical number.
+func hasRedundantLeadingZero(s string) bool {
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	return i+1 < len(s) && s[i] == '0' && s[i+1] >= '0' && s[i+1] <= '9'
 }
 
 // scanCSV streams the records after the header into w, coercing each cell to
@@ -101,9 +143,12 @@ func scanCSV(r io.Reader, comma rune, cols []source.Column, w *rowWriter) error 
 				row[i] = textValue(rec[i], col.Type)
 			}
 		}
-		done, err := w.add(row)
-		if err != nil || done {
+		ok, err := w.add(row)
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return nil // hit the cap
 		}
 	}
 }
@@ -117,14 +162,14 @@ func textValue(s, affinity string) any {
 		if s == "" {
 			return nil
 		}
-		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n, ok := parseSQLiteInt(s); ok {
 			return n
 		}
 	case "REAL":
 		if s == "" {
 			return nil
 		}
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
+		if f, ok := parseSQLiteReal(s); ok {
 			return f
 		}
 	}
@@ -145,10 +190,11 @@ func (g *typeGuess) seeText(s string) {
 		return
 	}
 	g.seen = true
-	if _, err := strconv.ParseInt(s, 10, 64); err != nil {
-		g.notInt = true
+	if _, ok := parseSQLiteInt(s); ok {
+		return // a valid int is also a valid real; no need to check further
 	}
-	if _, err := strconv.ParseFloat(s, 64); err != nil {
+	g.notInt = true
+	if _, ok := parseSQLiteReal(s); !ok {
 		g.notReal = true
 	}
 }

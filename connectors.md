@@ -321,12 +321,18 @@ SELECT * FROM files."data/orders.csv" LIMIT 10
 
 The schema is inferred from a sample of the first 1000 rows/objects: a column
 every sampled value fits as an integer is `INTEGER`, as a number `REAL`,
-otherwise `TEXT`. JSON columns are the key union of the sampled objects in
+otherwise `TEXT`. Identifier-like values are kept as text so they survive a
+`WHERE` unchanged — a leading zero (`01234`), a sign, or a non-finite float
+(`NaN`) keeps the column `TEXT`. A CSV column whose distinguishing value first
+appears after the sample may be typed from the sample alone; a JSON key that
+first appears past the sample is dropped from the schema, and the scan emits a
+warning naming it. JSON columns are the key union of the sampled objects in
 first-seen order; nested objects/arrays are stored as JSON text (query with
 `json_extract`). Empty CSV cells in numeric columns load as NULL; empty or
-duplicate header cells are renamed (`column_3`, `id_2`). `dfetch tables files`
-walks the working directory for supported files (hidden files and directories
-are skipped).
+duplicate header cells are renamed (`column_3`, `id_2`), case-insensitively
+(SQLite column names are). `dfetch tables files` walks the working directory for
+supported files (hidden and unreadable directories are skipped, and an
+unfiltered listing stops at 10000 files).
 
 There is no filter push-down — the file is the API — but a `LIMIT` (plus
 `OFFSET`) with no `WHERE`/`ORDER BY` stops reading early. Anything else reads

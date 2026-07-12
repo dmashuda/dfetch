@@ -100,14 +100,30 @@ func (c *Connector) resolve(table string) (string, error) {
 	return filepath.Join(c.root, p), nil
 }
 
+// maxListEntries bounds an unfiltered walk (opts.Limit == 0), so discovery —
+// `dfetch tables` walks the whole working-directory tree since the builtin is
+// rooted at "." — can't wander an enormous tree unbounded. A query never
+// depends on this: it resolves its file by path via DescribeTable/Scan.
+const maxListEntries = 10000
+
 // ListTables walks the root for supported data files and returns their
 // slash-separated relative paths. Hidden files and directories (dot-prefixed)
-// are skipped.
+// are skipped, an unreadable directory is skipped rather than failing the whole
+// listing, and an unfiltered walk stops at maxListEntries.
 func (c *Connector) ListTables(ctx context.Context, opts source.ListOptions) ([]string, error) {
+	limit := opts.Limit
+	if limit <= 0 || limit > maxListEntries {
+		limit = maxListEntries
+	}
 	var names []string
 	walkErr := filepath.WalkDir(c.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// An unreadable directory (permission denied) shouldn't sink the
+			// whole listing; skip it and keep walking the readable rest.
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -133,7 +149,7 @@ func (c *Connector) ListTables(ctx context.Context, opts source.ListOptions) ([]
 			return nil
 		}
 		names = append(names, name)
-		if opts.Limit > 0 && len(names) >= opts.Limit {
+		if len(names) >= limit {
 			return fs.SkipAll
 		}
 		return nil
@@ -150,10 +166,13 @@ func (c *Connector) ListTables(ctx context.Context, opts source.ListOptions) ([]
 func (c *Connector) DescribeTable(ctx context.Context, table string) (source.TableSchema, bool, error) {
 	fm, supported := formatOf(table)
 	if !supported {
-		// Distinguish "not a data file" (helpful error) from "no such file"
-		// (the engine's usual unknown-table error).
+		// Distinguish a directory and an unsupported existing file (helpful
+		// errors) from "no such file" (the engine's usual unknown-table error).
 		if p, rerr := c.resolve(table); rerr == nil {
-			if _, serr := os.Stat(p); serr == nil {
+			if info, serr := os.Stat(p); serr == nil {
+				if info.IsDir() {
+					return source.TableSchema{}, false, fmt.Errorf("files: %s is a directory; query the data files inside it (e.g. %s/<file>.csv)", table, table)
+				}
 				return source.TableSchema{}, false, fmt.Errorf("files: %s: unsupported file type (supported: .csv, .tsv, .json, .jsonl, .ndjson)", table)
 			}
 		}
@@ -225,18 +244,18 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 	}
 	defer func() { _ = file.Close() }()
 
-	stop, pushed := c.maxRows, false
+	rowCap, pushed := c.maxRows, false
 	if req.Limit != nil && len(req.Filters) == 0 && len(req.OrderBy) == 0 {
 		n := *req.Limit
 		if req.Offset != nil {
 			n += *req.Offset // fetch limit+offset; SQLite re-applies OFFSET verbatim
 		}
-		if n < stop {
-			stop, pushed = n, true
+		if n < rowCap {
+			rowCap, pushed = n, true
 		}
 	}
 
-	w := &rowWriter{cols: ts.ColumnNames(), emit: emit, stop: stop}
+	w := &rowWriter{cols: ts.ColumnNames(), emit: emit, cap: rowCap}
 	fm, _ := formatOf(req.Table)
 	switch fm {
 	case formatCSV:
@@ -254,26 +273,41 @@ func (c *Connector) Scan(ctx context.Context, req source.ScanRequest, emit func(
 	if err := w.flush(); err != nil {
 		return err
 	}
-	// Only warn when the maxRows safety cap (not a pushed user LIMIT) bounded
-	// the read and the file filled it — a strong sign rows were left behind.
-	if !pushed && w.total >= c.maxRows {
+	// Warn only when the max_rows safety cap (not a pushed user LIMIT) actually
+	// truncated the file — w.truncated is set only when a row past the cap was
+	// offered, so an exactly-max_rows file does not warn.
+	if !pushed && w.truncated {
 		return emit(source.Warn("files.%s: capped at max_rows=%d; raise the max_rows param or add a LIMIT for the rest", req.Table, c.maxRows))
+	}
+	if len(w.dropped) > 0 {
+		return emit(source.Warn("files.%s: %d column(s) not in the inferred schema were dropped (%s); they appear beyond the first %d sampled rows",
+			req.Table, len(w.dropped), strings.Join(w.dropped, ", "), sampleRows))
 	}
 	return nil
 }
 
-// rowWriter batches rows into emitted chunks and stops the read at a row cap.
+// rowWriter batches rows into emitted chunks and enforces a row cap. Callers
+// add every source row and stop when add reports the cap was hit; a row offered
+// past the cap sets truncated, so an exactly-cap result is not misreported as
+// truncated.
 type rowWriter struct {
-	cols  []string
-	emit  func(*source.Rows) error
-	batch [][]any
-	total int
-	stop  int
+	cols      []string
+	emit      func(*source.Rows) error
+	batch     [][]any
+	total     int
+	cap       int // max rows to emit; 0 = unlimited
+	truncated bool
+	dropped   []string // keys seen in data but absent from the inferred schema
 }
 
-// add appends one row, emitting a chunk when the batch fills. done reports
-// that the row cap was reached and the caller should stop reading.
-func (w *rowWriter) add(row []any) (done bool, err error) {
+// add appends one row, emitting a chunk when the batch fills. It returns
+// ok=false once the cap is reached (the row is dropped and truncated set), so
+// the caller stops reading.
+func (w *rowWriter) add(row []any) (ok bool, err error) {
+	if w.cap > 0 && w.total >= w.cap {
+		w.truncated = true
+		return false, nil
+	}
 	w.batch = append(w.batch, row)
 	w.total++
 	if len(w.batch) >= batchSize {
@@ -281,7 +315,22 @@ func (w *rowWriter) add(row []any) (done bool, err error) {
 			return false, err
 		}
 	}
-	return w.total >= w.stop, nil
+	return true, nil
+}
+
+// noteDropped records a data key that has no column in the inferred schema
+// (deduped), so Scan can warn that the schema is incomplete. The list is capped
+// so a wildly heterogeneous file can't accumulate unboundedly.
+func (w *rowWriter) noteDropped(key string) {
+	if len(w.dropped) >= 32 {
+		return
+	}
+	for _, k := range w.dropped {
+		if k == key {
+			return
+		}
+	}
+	w.dropped = append(w.dropped, key)
 }
 
 // flush emits the pending batch, if any.
@@ -290,7 +339,7 @@ func (w *rowWriter) flush() error {
 		return nil
 	}
 	rows := &source.Rows{Columns: w.cols, Rows: w.batch}
-	w.batch = nil
+	w.batch = make([][]any, 0, batchSize) // fresh: emit handed off the old backing array
 	return w.emit(rows)
 }
 

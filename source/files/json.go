@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
+	"strings"
 
 	"github.com/dmashuda/dfetch/source"
 )
@@ -13,6 +13,9 @@ import (
 // describeJSON infers the schema from a sample of objects: the columns are the
 // union of keys in first-seen order; each value contributes to its key's type
 // guess. lines selects JSONL (a stream of objects) over a top-level array.
+// Keys are unioned case-insensitively (SQLite column names are), so objects
+// carrying both "id" and "ID" collapse to one column — first-seen casing wins —
+// rather than building a CREATE TABLE with a duplicate column that fails.
 func describeJSON(r io.Reader, lines bool) ([]source.Column, error) {
 	dec := json.NewDecoder(stripBOM(r))
 	dec.UseNumber()
@@ -23,7 +26,7 @@ func describeJSON(r io.Reader, lines bool) ([]source.Column, error) {
 	}
 
 	var keys []string
-	guesses := map[string]*typeGuess{}
+	guesses := map[string]*typeGuess{} // keyed by lower(key)
 	for range sampleRows {
 		more, objKeys, vals, err := nextObject(dec, lines)
 		if err != nil {
@@ -33,10 +36,11 @@ func describeJSON(r io.Reader, lines bool) ([]source.Column, error) {
 			break
 		}
 		for _, k := range objKeys {
-			g, ok := guesses[k]
+			lk := strings.ToLower(k)
+			g, ok := guesses[lk]
 			if !ok {
 				g = &typeGuess{}
-				guesses[k] = g
+				guesses[lk] = g
 				keys = append(keys, k)
 			}
 			g.seeJSON(vals[k])
@@ -48,14 +52,15 @@ func describeJSON(r io.Reader, lines bool) ([]source.Column, error) {
 
 	cols := make([]source.Column, len(keys))
 	for i, k := range keys {
-		cols[i] = source.Column{Name: k, Type: guesses[k].affinity()}
+		cols[i] = source.Column{Name: k, Type: guesses[strings.ToLower(k)].affinity()}
 	}
 	return cols, nil
 }
 
 // scanJSON streams the objects into w, mapping each object's keys onto the
-// declared columns (missing keys become NULL; keys outside the inferred
-// schema are dropped).
+// declared columns (missing keys become NULL). A key outside the inferred
+// schema — e.g. one that first appears past the sampled rows — is dropped and
+// noted so Scan can warn about the incomplete schema.
 func scanJSON(r io.Reader, lines bool, cols []source.Column, w *rowWriter) error {
 	dec := json.NewDecoder(stripBOM(r))
 	dec.UseNumber()
@@ -67,7 +72,7 @@ func scanJSON(r io.Reader, lines bool, cols []source.Column, w *rowWriter) error
 
 	index := make(map[string]int, len(cols))
 	for i, col := range cols {
-		index[col.Name] = i
+		index[strings.ToLower(col.Name)] = i
 	}
 	for {
 		more, _, vals, err := nextObject(dec, lines)
@@ -79,13 +84,18 @@ func scanJSON(r io.Reader, lines bool, cols []source.Column, w *rowWriter) error
 		}
 		row := make([]any, len(cols))
 		for k, v := range vals {
-			if i, ok := index[k]; ok {
+			if i, ok := index[strings.ToLower(k)]; ok {
 				row[i] = jsonValue(v)
+			} else {
+				w.noteDropped(k)
 			}
 		}
-		done, err := w.add(row)
-		if err != nil || done {
+		ok, err := w.add(row)
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return nil // hit the cap
 		}
 	}
 }
@@ -150,24 +160,24 @@ func nextObject(dec *json.Decoder, lines bool) (more bool, keys []string, vals m
 
 // jsonValue maps a decoded JSON value to a localdb-accepted Go value: scalars
 // keep their natural type (integral numbers become int64, others float64) and
-// nested objects/arrays are re-marshaled to a JSON TEXT value.
+// nested objects/arrays are re-marshaled to a JSON TEXT value. JSON syntax
+// forbids the leading zeros / NaN / Inf that make CSV numeric coercion lossy,
+// so json.Number's own conversions are used directly.
 func jsonValue(v any) any {
 	switch x := v.(type) {
 	case nil, bool, string:
 		return x
 	case json.Number:
-		if n, err := strconv.ParseInt(string(x), 10, 64); err == nil {
+		if n, err := x.Int64(); err == nil {
 			return n
 		}
-		if f, err := strconv.ParseFloat(string(x), 64); err == nil {
+		if f, err := x.Float64(); err == nil {
 			return f
 		}
 		return string(x)
 	default:
-		b, err := json.Marshal(x)
-		if err != nil {
-			return fmt.Sprintf("%v", x)
-		}
+		// A value decoded from JSON always re-marshals, so the error is unreachable.
+		b, _ := json.Marshal(x)
 		return string(b)
 	}
 }
@@ -182,11 +192,11 @@ func (g *typeGuess) seeJSON(v any) {
 		g.seen = true
 	case json.Number:
 		g.seen = true
-		if _, err := strconv.ParseInt(string(x), 10, 64); err != nil {
+		if _, err := x.Int64(); err != nil {
 			g.notInt = true
-		}
-		if _, err := strconv.ParseFloat(string(x), 64); err != nil {
-			g.notReal = true
+			if _, err := x.Float64(); err != nil {
+				g.notReal = true
+			}
 		}
 	default:
 		g.seen = true

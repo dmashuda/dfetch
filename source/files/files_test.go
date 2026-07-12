@@ -243,6 +243,102 @@ func TestTextValueFallback(t *testing.T) {
 	assert.Equal(t, "9", textValue("9", "TEXT"))
 }
 
+// Identifier-like values (leading zeros, signs) and non-finite floats must not
+// be sniffed numeric — coercion would rewrite them and break the verbatim
+// SQLite re-filter (or, for NaN, store NULL).
+func TestNumericSniffingPreservesText(t *testing.T) {
+	for _, s := range []string{"01234", "+5", "007"} {
+		_, ok := parseSQLiteInt(s)
+		assert.False(t, ok, "int: %q", s)
+	}
+	for _, s := range []string{"NaN", "Inf", "+Inf", "01.5"} {
+		_, ok := parseSQLiteReal(s)
+		assert.False(t, ok, "real: %q", s)
+	}
+	n, ok := parseSQLiteInt("42")
+	assert.True(t, ok)
+	assert.Equal(t, int64(42), n)
+
+	// A zip-code column stays TEXT and stores the value as written.
+	c := newConn(t, map[string]string{"z.csv": "zip\n01234\n00420\n"}, nil)
+	ts := describe(t, c, "z.csv")
+	assert.Equal(t, "TEXT", ts.Columns[0].Type)
+	rows, _, _ := collectScan(t, c, source.ScanRequest{Table: "z.csv"})
+	assert.Equal(t, [][]any{{"01234"}, {"00420"}}, rows)
+
+	// A NaN cell keeps its column TEXT; the literal survives.
+	c = newConn(t, map[string]string{"m.csv": "v\n1.5\nNaN\n"}, nil)
+	ts = describe(t, c, "m.csv")
+	assert.Equal(t, "TEXT", ts.Columns[0].Type, "NaN poisons REAL sniffing -> TEXT")
+	rows, _, _ = collectScan(t, c, source.ScanRequest{Table: "m.csv"})
+	assert.Equal(t, [][]any{{"1.5"}, {"NaN"}}, rows)
+}
+
+// Case-variant column names collide in SQLite; CSV suffixes the duplicate and
+// JSON merges case-variant keys, so CREATE TABLE never sees a duplicate column.
+func TestCaseInsensitiveColumns(t *testing.T) {
+	c := newConn(t, map[string]string{"c.csv": "id,ID\n1,2\n"}, nil)
+	ts := describe(t, c, "c.csv")
+	assert.Equal(t, []string{"id", "ID_2"}, ts.ColumnNames(), "CSV suffixes the case-variant duplicate, keeping its casing")
+	rows, _, _ := collectScan(t, c, source.ScanRequest{Table: "c.csv"})
+	assert.Equal(t, [][]any{{int64(1), int64(2)}}, rows)
+
+	c = newConn(t, map[string]string{"j.jsonl": "{\"id\": 1, \"ID\": 2}\n"}, nil)
+	ts = describe(t, c, "j.jsonl")
+	assert.Equal(t, []string{"id"}, ts.ColumnNames(), "JSON merges case-variant keys into one column")
+
+	// End to end: the file loads into SQLite and is queryable (would fail with a
+	// duplicate-column CREATE TABLE otherwise).
+	e, err := engine.New(engine.WithConnector("files", c))
+	require.NoError(t, err)
+	_, err = e.Run(context.Background(), `SELECT id FROM files."j.jsonl"`)
+	require.NoError(t, err)
+}
+
+// A JSON key that first appears beyond the sampled window is dropped from the
+// schema; the scan warns rather than silently losing the field.
+func TestScanJSONWarnsOnUnschematizedKey(t *testing.T) {
+	var b strings.Builder
+	for i := range sampleRows {
+		fmt.Fprintf(&b, "{\"n\": %d}\n", i)
+	}
+	b.WriteString("{\"n\": 9999, \"surprise\": true}\n") // new key past the sample
+	c := newConn(t, map[string]string{"log.jsonl": b.String()}, nil)
+	ts := describe(t, c, "log.jsonl")
+	assert.Equal(t, []string{"n"}, ts.ColumnNames(), "surprise not sampled")
+	_, _, warnings := collectScan(t, c, source.ScanRequest{Table: "log.jsonl"})
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "surprise")
+}
+
+func TestScanMaxRowsExactlyCapNoWarn(t *testing.T) {
+	c := newConn(t, map[string]string{"d.csv": csvOfSize(10)}, map[string]any{"max_rows": 10})
+	rows, _, warnings := collectScan(t, c, source.ScanRequest{Table: "d.csv"})
+	assert.Len(t, rows, 10)
+	assert.Empty(t, warnings, "a file with exactly max_rows rows is not truncated")
+}
+
+func TestDescribeDirectory(t *testing.T) {
+	c := newConn(t, map[string]string{"data/x.csv": "a\n1\n"}, nil)
+	_, _, err := c.DescribeTable(context.Background(), "data")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is a directory")
+}
+
+func TestListTablesSkipsUnreadableDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	c := newConn(t, map[string]string{"ok.csv": "a\n1\n", "locked/secret.csv": "a\n1\n"}, nil)
+	locked := filepath.Join(c.root, "locked")
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // G302: a dir needs +x so t.TempDir cleanup can recurse in
+
+	names, err := c.ListTables(context.Background(), source.ListOptions{})
+	require.NoError(t, err, "an unreadable subdirectory must not fail the whole listing")
+	assert.Contains(t, names, "ok.csv")
+}
+
 func TestScanJSON(t *testing.T) {
 	c := newConn(t, map[string]string{
 		"e.json": `[
@@ -327,7 +423,7 @@ func TestScanMaxRowsWarns(t *testing.T) {
 func TestScanMissingFile(t *testing.T) {
 	c := newConn(t, nil, nil)
 	err := c.Scan(context.Background(), source.ScanRequest{Table: "nope.csv"}, func(*source.Rows) error {
-		t.Fatal("emit must not be called")
+		require.Fail(t, "emit must not be called")
 		return nil
 	})
 	require.ErrorContains(t, err, "no file")
