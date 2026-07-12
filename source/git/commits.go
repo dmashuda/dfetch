@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dmashuda/dfetch/source"
 )
@@ -21,57 +20,55 @@ const logFormat = "%H%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ce%x1f%ct%x1f%P%x1f%s%x1f%
 
 // logPlan is the pushed-down shape of one commits scan.
 type logPlan struct {
-	args        []string // git argv, starting with "log"
-	ref         string   // value stored in the ref column
-	ancestorSha string   // non-empty: verify sha is an ancestor of ref first
-	pushedLimit bool     // -n carries the user's LIMIT (+OFFSET)
-	capped      bool     // -n is the max_rows safety cap instead
+	args     []string // git log argv, excluding the trailing revision
+	rev      string   // the revision to verify and walk (HEAD, a ref, or a sha)
+	noWalk   bool     // rev is a sha to fetch directly (--no-walk), not a walk root
+	stampRef any      // value for the synthetic ref column (nil = unknown)
+	ancestor bool     // verify rev is reachable from stampRef before emitting
+	capped   bool     // -n is the max_rows safety cap, not a user LIMIT
+	emitCap  int      // rows to emit (max_rows when capped, else the pushed LIMIT)
 }
 
-// planLog translates the ScanRequest into git log arguments. Consumed exactly:
-// `ref` equality (the start point, default HEAD) and `sha` equality
-// (--no-walk). A committer_date range narrows the walk via --since/--until
-// widened by one second — a superset, so it never counts as consumed and LIMIT
-// cannot ride it. LIMIT (+OFFSET) becomes -n only when every filter was
-// consumed and there is no ORDER BY (git's log order is not a strict sort);
-// otherwise -n is the max_rows cap.
-func planLog(req source.ScanRequest, maxRows int) logPlan {
-	p := logPlan{ref: "HEAD"}
-	args := []string{"log", "-z", "--pretty=format:" + logFormat}
+// planLog translates the ScanRequest into a git log plan. Two columns push
+// down, and only as a single equality: `ref` selects the walk root (default
+// HEAD) and `sha` fetches one commit directly (--no-walk). The ref column is
+// synthetic — every row is stamped with the walked ref — so a non-equality
+// predicate on it (IN, !=, an inequality) cannot be answered by one walk, and a
+// HEAD walk stamped 'HEAD' would be silently wrong; such a predicate is an
+// error rather than a wrong answer (mirrors github's required-filter handling).
+// No other column pushes down: committer_date is deliberately NOT translated to
+// --since/--until, which prune the *traversal* (stopping at the first
+// out-of-window commit) and so can drop matching commits in a non-monotonic
+// history — not the superset the engine's verbatim re-filter relies on. LIMIT
+// (+OFFSET) becomes -n only when every filter was consumed and there is no
+// ORDER BY (git's log order is not a strict sort); otherwise -n is the max_rows
+// cap plus one, so the caller can tell a real truncation from a full result.
+func planLog(req source.ScanRequest, maxRows int) (logPlan, error) {
+	p := logPlan{rev: "HEAD"}
 	consumedAll := true
 	sha, refGiven := "", false
+	var refValue any
 
 	for _, f := range req.Filters {
 		switch f.Column {
 		case "ref":
-			if f.Op == source.OpEq {
-				if s, ok := f.Value.(string); ok && s != "" {
-					p.ref, refGiven = s, true
-					continue
-				}
+			s, ok := f.Value.(string)
+			if f.Op != source.OpEq || !ok || s == "" {
+				return logPlan{}, fmt.Errorf("git.commits: the ref column supports only a single equality filter (e.g. ref='main'); rewrite the query to select one ref")
 			}
+			p.rev, refGiven, refValue = s, true, f.Value
 		case "sha":
-			if f.Op == source.OpEq {
-				if s, ok := f.Value.(string); ok && s != "" {
-					sha = s
-					continue
-				}
+			s, ok := f.Value.(string)
+			if f.Op != source.OpEq || !ok || s == "" {
+				return logPlan{}, fmt.Errorf("git.commits: the sha column supports only a single equality filter (e.g. sha='abc123')")
 			}
-		case "committer_date":
-			if t, ok := parseTime(f.Value); ok {
-				switch f.Op {
-				case source.OpGt, source.OpGte:
-					args = append(args, "--since="+t.Add(-time.Second).UTC().Format(timeLayout))
-				case source.OpLt, source.OpLte:
-					args = append(args, "--until="+t.Add(time.Second).UTC().Format(timeLayout))
-				}
-			}
-			// The widened window is a superset; SQLite re-applies the exact
-			// bound, so this filter is never consumed.
+			sha = s
+		default:
+			consumedAll = false // e.g. committer_date: left for SQLite to apply
 		}
-		consumedAll = false
 	}
 
+	p.emitCap, p.capped = maxRows, true
 	n := maxRows
 	if req.Limit != nil && consumedAll && len(req.OrderBy) == 0 {
 		want := *req.Limit
@@ -79,43 +76,50 @@ func planLog(req source.ScanRequest, maxRows int) logPlan {
 			want += *req.Offset // fetch limit+offset; SQLite re-applies OFFSET
 		}
 		if want < n {
-			n, p.pushedLimit = want, true
+			n, p.emitCap, p.capped = want, want, false
 		}
 	}
-	p.capped = !p.pushedLimit
-	args = append(args, "-n", strconv.Itoa(n))
+	if p.capped {
+		n++ // fetch one extra so a full result isn't misreported as truncated
+	}
 
+	// Stamp the ref column truthfully: the walked ref when we walk, or (for a
+	// sha lookup constrained to a ref that passes the ancestry check) that ref;
+	// NULL for a bare sha lookup, which has no single ref to claim.
 	if sha != "" {
+		p.rev, p.noWalk, p.ancestor = sha, true, refGiven
 		if refGiven {
-			p.ancestorSha = sha
+			p.stampRef = refValue
 		}
-		args = append(args, "--no-walk", sha)
 	} else {
-		args = append(args, p.ref)
+		p.stampRef = p.rev
 	}
-	p.args = args
-	return p
-}
 
-// parseTime reads a filter value as a timestamp: RFC3339 (the column's own
-// format), a zoneless timestamp, or a bare date (both taken as UTC).
-func parseTime(v any) (time.Time, bool) {
-	s, ok := v.(string)
-	if !ok {
-		return time.Time{}, false
+	p.args = []string{"log", "-z", "--pretty=format:" + logFormat, "-n", strconv.Itoa(n)}
+	if p.noWalk {
+		p.args = append(p.args, "--no-walk")
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
-		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
+	return p, nil
 }
 
 func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emit func(*source.Rows) error) error {
-	p := planLog(req, c.maxRows)
-	if p.ancestorSha != "" {
-		ok, err := c.isAncestor(ctx, p.ancestorSha, p.ref)
+	p, err := planLog(req, c.maxRows)
+	if err != nil {
+		return err
+	}
+
+	// A revision git can't resolve (a bad/unknown sha, or HEAD in a repo with
+	// no commits yet) means "no such commit" — zero rows, not a scan error.
+	resolved, err := c.revExists(ctx, p.rev)
+	if err != nil {
+		return err
+	}
+	if !resolved {
+		return nil
+	}
+	if p.ancestor {
+		ref, _ := p.stampRef.(string)
+		ok, err := c.isAncestor(ctx, p.rev, ref)
 		if err != nil {
 			return err
 		}
@@ -124,13 +128,14 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 		}
 	}
 
-	out, err := c.output(ctx, p.args...)
+	// --end-of-options stops git from parsing a revision that begins with '-'
+	// (e.g. ref='--output=…') as an option.
+	out, err := c.output(ctx, append(append([]string(nil), p.args...), "--end-of-options", p.rev)...)
 	if err != nil {
 		return err
 	}
 
-	cols := c.Tables()[0].ColumnNames()
-	w := &rowWriter{cols: cols, emit: emit, stop: c.maxRows}
+	w := &rowWriter{cols: c.tableCols("commits"), emit: emit, cap: p.emitCap}
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		if len(rec) == 0 {
 			continue
@@ -144,7 +149,7 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 			return err
 		}
 		row := []any{
-			p.ref,                     // ref, as the query wrote it (default HEAD)
+			p.stampRef,                // ref (walked ref, or NULL for a bare sha lookup)
 			f[0],                      // sha
 			f[1], f[2], unixUTC(f[3]), // author name/email/date
 			f[4], f[5], unixUTC(f[6]), // committer name/email/date
@@ -152,26 +157,50 @@ func (c *Connector) scanCommits(ctx context.Context, req source.ScanRequest, emi
 			strings.TrimRight(f[9], "\n"), // body
 			string(parents),
 		}
-		done, err := w.add(row)
+		ok, err := w.add(row)
 		if err != nil {
 			return err
 		}
-		if done {
-			break
+		if !ok {
+			break // hit the emit cap; the extra fetched row is dropped
 		}
 	}
 	if err := w.flush(); err != nil {
 		return err
 	}
-	if p.capped && w.total >= c.maxRows {
+	if p.capped && w.truncated {
 		return emit(source.Warn("git.commits: capped at max_rows=%d; raise the max_rows param or add a LIMIT/narrower filters for the rest", c.maxRows))
 	}
 	return nil
 }
 
-// isAncestor reports whether sha is reachable from ref (exit 0 yes, 1 no).
-func (c *Connector) isAncestor(ctx context.Context, sha, ref string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", c.repo, "merge-base", "--is-ancestor", sha, ref) //nolint:gosec // G204: same as output(); argv exec, no shell
+// revExists reports whether git can resolve rev to a commit. With
+// --verify --quiet, an unknown/ill-formed revision exits 1, which the caller
+// treats as zero rows rather than an error; any other failure (e.g. exit 128,
+// "not a git repository") is a real error and propagates.
+func (c *Connector) revExists(ctx context.Context, rev string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", c.repo, //nolint:gosec // G204: same as output(); argv exec, no shell
+		"rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil // no such revision
+	}
+	if msg := bytes.TrimSpace(stderr.Bytes()); len(msg) > 0 {
+		return false, fmt.Errorf("git rev-parse: %s", msg)
+	}
+	return false, fmt.Errorf("git rev-parse: %w", err)
+}
+
+// isAncestor reports whether rev is reachable from ref (exit 0 yes, 1 no).
+func (c *Connector) isAncestor(ctx context.Context, rev, ref string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", c.repo, //nolint:gosec // G204: same as output(); argv exec, no shell
+		"merge-base", "--is-ancestor", "--end-of-options", rev, ref)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()

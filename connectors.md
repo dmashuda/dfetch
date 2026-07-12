@@ -312,7 +312,7 @@ or `jira.*` (e.g. commits not referenced by any closed issue).
 
 | table | rows | push-down |
 | --- | --- | --- |
-| `git.commits` | commit history from a ref (default `HEAD`) | `ref`/`sha` equality, `committer_date` range, `LIMIT` |
+| `git.commits` | commit history from a ref (default `HEAD`) | `ref`/`sha` single equality, `LIMIT` |
 | `git.branches` | local branches (`is_head` marks the current one) | — |
 | `git.tags` | tags (annotated tags dereference to their commit) | — |
 | `git.status` | working-tree status (porcelain `staged`/`unstaged` codes) | — |
@@ -320,14 +320,18 @@ or `jira.*` (e.g. commits not referenced by any closed issue).
 
 `commits` walks from `HEAD` unless a `ref` equality filter picks another
 branch/tag/sha; a `sha` equality filter fetches just that commit (combined with
-`ref`, ancestry is verified, so a commit not on that ref returns no rows). A
-`committer_date` range narrows the walk via `--since`/`--until` (widened by a
-second, so SQLite's exact re-filter decides the boundaries). `LIMIT` is pushed
-as `-n` only when every filter was consumed and there is no `ORDER BY` — git's
-log order is not a strict sort — otherwise the walk is capped at `max_rows`
-(default 100000) with a warning when the cap truncates. Dates are fixed-width
-UTC (`2026-01-03T10:00:00Z`), so they sort and compare lexically; `parents` is
-a JSON array of parent shas (`json_extract`-able).
+`ref`, ancestry is verified, so a commit not on that ref returns no rows; a
+bare `sha` lookup leaves the `ref` column NULL). `ref` and `sha` are synthetic
+selectors — each row is stamped with the ref you walked — so they accept only a
+**single equality** (`ref='main'`); a different predicate (`IN`, `!=`, `LIKE`)
+is an error rather than a silently wrong answer. Other columns, including
+`committer_date`, are **not** pushed to git and are applied by SQLite over the
+full history — git's date options prune the traversal and could drop matching
+commits. `LIMIT` is pushed as `-n` only when every filter was consumed and there
+is no `ORDER BY` (git's log order is not a strict sort); otherwise the walk is
+capped at `max_rows` (default 100000) with a warning when the cap truncates.
+Dates are fixed-width UTC (`2026-01-03T10:00:00Z`), so they sort and compare
+lexically; `parents` is a JSON array of parent shas (`json_extract`-able).
 
 ```sh
 # what changed lately?

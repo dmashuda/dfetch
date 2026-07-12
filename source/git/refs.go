@@ -9,8 +9,9 @@ import (
 	"github.com/dmashuda/dfetch/source"
 )
 
-// The refs/status/files tables have no push-down: the datasets are small (or
-// capped by the shared rowWriter), and SQLite applies the query.
+// The refs/status/files tables have no filter push-down: the datasets are small
+// (or capped by the shared rowWriter), and SQLite applies the query. Each caps
+// at max_rows and warns via capWarn when the cap actually truncates.
 
 func (c *Connector) scanBranches(ctx context.Context, emit func(*source.Rows) error) error {
 	out, err := c.output(ctx, "for-each-ref", "refs/heads",
@@ -18,7 +19,7 @@ func (c *Connector) scanBranches(ctx context.Context, emit func(*source.Rows) er
 	if err != nil {
 		return err
 	}
-	w := &rowWriter{cols: tableCols(c, "branches"), emit: emit, stop: c.maxRows}
+	w := &rowWriter{cols: c.tableCols("branches"), emit: emit, cap: c.maxRows}
 	for line := range strings.Lines(string(out)) {
 		f := strings.SplitN(strings.TrimRight(line, "\n"), "\x1f", 6)
 		if len(f) != 6 {
@@ -28,15 +29,15 @@ func (c *Connector) scanBranches(ctx context.Context, emit func(*source.Rows) er
 		if f[2] != "" {
 			upstream = f[2]
 		}
-		done, err := w.add([]any{f[0], f[1], upstream, f[3] == "*", unixUTC(f[4]), f[5]})
+		ok, err := w.add([]any{f[0], f[1], upstream, f[3] == "*", unixUTC(f[4]), f[5]})
 		if err != nil {
 			return err
 		}
-		if done {
+		if !ok {
 			break
 		}
 	}
-	return w.flush()
+	return c.finish(w, emit, "branches")
 }
 
 func (c *Connector) scanTags(ctx context.Context, emit func(*source.Rows) error) error {
@@ -45,7 +46,7 @@ func (c *Connector) scanTags(ctx context.Context, emit func(*source.Rows) error)
 	if err != nil {
 		return err
 	}
-	w := &rowWriter{cols: tableCols(c, "tags"), emit: emit, stop: c.maxRows}
+	w := &rowWriter{cols: c.tableCols("tags"), emit: emit, cap: c.maxRows}
 	for line := range strings.Lines(string(out)) {
 		f := strings.SplitN(strings.TrimRight(line, "\n"), "\x1f", 5)
 		if len(f) != 5 {
@@ -55,15 +56,15 @@ func (c *Connector) scanTags(ctx context.Context, emit func(*source.Rows) error)
 		if f[2] != "" { // annotated tag: use the dereferenced commit
 			sha = f[2]
 		}
-		done, err := w.add([]any{f[0], sha, unixUTC(f[3]), f[4]})
+		ok, err := w.add([]any{f[0], sha, unixUTC(f[3]), f[4]})
 		if err != nil {
 			return err
 		}
-		if done {
+		if !ok {
 			break
 		}
 	}
-	return w.flush()
+	return c.finish(w, emit, "tags")
 }
 
 func (c *Connector) scanStatus(ctx context.Context, emit func(*source.Rows) error) error {
@@ -75,17 +76,17 @@ func (c *Connector) scanStatus(ctx context.Context, emit func(*source.Rows) erro
 	if err != nil {
 		return err
 	}
-	w := &rowWriter{cols: tableCols(c, "status"), emit: emit, stop: c.maxRows}
+	w := &rowWriter{cols: c.tableCols("status"), emit: emit, cap: c.maxRows}
 	for _, row := range rows {
-		done, err := w.add(row)
+		ok, err := w.add(row)
 		if err != nil {
 			return err
 		}
-		if done {
+		if !ok {
 			break
 		}
 	}
-	return w.flush()
+	return c.finish(w, emit, "status")
 }
 
 // parseStatusZ parses `git status --porcelain=v1 -z`: entries are
@@ -122,7 +123,7 @@ func (c *Connector) scanFiles(ctx context.Context, emit func(*source.Rows) error
 	if err != nil {
 		return err
 	}
-	w := &rowWriter{cols: tableCols(c, "files"), emit: emit, stop: c.maxRows}
+	w := &rowWriter{cols: c.tableCols("files"), emit: emit, cap: c.maxRows}
 	for _, entry := range bytes.Split(out, []byte{0}) {
 		if len(entry) == 0 {
 			continue
@@ -133,25 +134,31 @@ func (c *Connector) scanFiles(ctx context.Context, emit func(*source.Rows) error
 		if !ok || len(fields) != 3 {
 			return fmt.Errorf("git ls-files: malformed entry %q", entry)
 		}
-		done, err := w.add([]any{path, fields[0], fields[1]})
+		added, err := w.add([]any{path, fields[0], fields[1]})
 		if err != nil {
 			return err
 		}
-		if done {
+		if !added {
 			break
 		}
 	}
+	return c.finish(w, emit, "files")
+}
+
+// finish flushes the writer and, when the row cap truncated the result, emits a
+// warning naming the table and max_rows.
+func (c *Connector) finish(w *rowWriter, emit func(*source.Rows) error, table string) error {
 	if err := w.flush(); err != nil {
 		return err
 	}
-	if w.total >= c.maxRows {
-		return emit(source.Warn("git.files: capped at max_rows=%d; raise the max_rows param for the rest", c.maxRows))
+	if w.truncated {
+		return emit(source.Warn("git.%s: capped at max_rows=%d; raise the max_rows param for the rest", table, c.maxRows))
 	}
 	return nil
 }
 
 // tableCols returns the declared column names of one table.
-func tableCols(c *Connector, name string) []string {
+func (c *Connector) tableCols(name string) []string {
 	for _, ts := range c.Tables() {
 		if ts.Name == name {
 			return ts.ColumnNames()

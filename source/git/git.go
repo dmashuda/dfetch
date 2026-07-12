@@ -138,18 +138,27 @@ func unixUTC(s string) any {
 	return time.Unix(n, 0).UTC().Format(timeLayout)
 }
 
-// rowWriter batches rows into emitted chunks and stops the read at a row cap.
+// rowWriter batches rows into emitted chunks and enforces a row cap. Callers
+// add every source row and stop when add reports the cap was hit; a row offered
+// past the cap sets truncated, so an exactly-cap result is not misreported as
+// truncated.
 type rowWriter struct {
-	cols  []string
-	emit  func(*source.Rows) error
-	batch [][]any
-	total int
-	stop  int
+	cols      []string
+	emit      func(*source.Rows) error
+	batch     [][]any
+	total     int
+	cap       int // max rows to emit; 0 = unlimited
+	truncated bool
 }
 
-// add appends one row, emitting a chunk when the batch fills. done reports
-// that the row cap was reached and the caller should stop reading.
-func (w *rowWriter) add(row []any) (done bool, err error) {
+// add appends one row, emitting a chunk when the batch fills. It returns
+// ok=false once the cap is reached (the row is dropped and truncated set), so
+// the caller stops reading.
+func (w *rowWriter) add(row []any) (ok bool, err error) {
+	if w.cap > 0 && w.total >= w.cap {
+		w.truncated = true
+		return false, nil
+	}
 	w.batch = append(w.batch, row)
 	w.total++
 	if len(w.batch) >= batchSize {
@@ -157,7 +166,7 @@ func (w *rowWriter) add(row []any) (done bool, err error) {
 			return false, err
 		}
 	}
-	return w.total >= w.stop, nil
+	return true, nil
 }
 
 // flush emits the pending batch, if any.
@@ -166,6 +175,6 @@ func (w *rowWriter) flush() error {
 		return nil
 	}
 	rows := &source.Rows{Columns: w.cols, Rows: w.batch}
-	w.batch = nil
+	w.batch = make([][]any, 0, batchSize) // fresh: emit handed off the old backing array
 	return w.emit(rows)
 }
