@@ -1,6 +1,6 @@
 # Connectors
 
-Four connectors are built in and need no configuration. To point one at a
+Six connectors are built in and need no configuration. To point one at a
 non-default host (e.g. an enterprise or remote instance), or to register the same
 connector under several schemas, see [Configuration](README.md#configuration).
 
@@ -301,6 +301,64 @@ the Cookie header). Same lazy resolution and precedence as the auth header.
 
 `slack.search` requires a **user token** (`xoxp-…`); bot tokens (`xoxb-…`) cannot
 call `search.messages` and the API returns `not_allowed_token_type`.
+
+## Git — schema `git`
+
+Serves the local git repository as tables by running the `git` binary (as an
+argv — never through a shell). No network and no auth; the builtin uses the
+repository of the working directory, and a config source can point elsewhere
+via `params.repo`. History questions become SQL — and join against `github.*`
+or `jira.*` (e.g. commits not referenced by any closed issue).
+
+| table | rows | push-down |
+| --- | --- | --- |
+| `git.commits` | commit history from a ref (default `HEAD`) | `ref`/`sha` equality, `committer_date` range, `LIMIT` |
+| `git.branches` | local branches (`is_head` marks the current one) | — |
+| `git.tags` | tags (annotated tags dereference to their commit) | — |
+| `git.status` | working-tree status (porcelain `staged`/`unstaged` codes) | — |
+| `git.files` | tracked files in the index (`path`, `mode`, `sha`) | — |
+
+`commits` walks from `HEAD` unless a `ref` equality filter picks another
+branch/tag/sha; a `sha` equality filter fetches just that commit (combined with
+`ref`, ancestry is verified, so a commit not on that ref returns no rows). A
+`committer_date` range narrows the walk via `--since`/`--until` (widened by a
+second, so SQLite's exact re-filter decides the boundaries). `LIMIT` is pushed
+as `-n` only when every filter was consumed and there is no `ORDER BY` — git's
+log order is not a strict sort — otherwise the walk is capped at `max_rows`
+(default 100000) with a warning when the cap truncates. Dates are fixed-width
+UTC (`2026-01-03T10:00:00Z`), so they sort and compare lexically; `parents` is
+a JSON array of parent shas (`json_extract`-able).
+
+```sh
+# what changed lately?
+dfetch query "SELECT substr(sha,1,8) AS sha, subject, author_name, committer_date
+              FROM git.commits LIMIT 20"
+
+# commits on a branch since a date, by author domain
+dfetch query "SELECT author_email, COUNT(*) AS commits
+              FROM git.commits
+              WHERE ref='main' AND committer_date >= '2026-01-01'
+              GROUP BY author_email ORDER BY commits DESC"
+
+# which local branches are stale?
+dfetch query "SELECT name, committer_date FROM git.branches
+              WHERE is_head = 0 ORDER BY committer_date ASC LIMIT 10"
+
+# tags joined to the commits they point at
+dfetch query "SELECT t.name, t.created_date, c.subject
+              FROM git.tags t
+              JOIN git.commits c ON c.sha = t.sha
+              ORDER BY t.created_date DESC LIMIT 10"
+```
+
+```yaml
+sources:
+  - name: linux # queried as linux.commits
+    type: git
+    params:
+      repo: /home/you/src/linux
+      max_rows: 500000
+```
 
 ## PostgreSQL — connector type `postgres`
 

@@ -104,6 +104,7 @@ source/github           GitHub connector (issues, pulls, repos, commits, release
 source/jaeger           Jaeger connector (spans, services, operations)
 source/ckan             CKAN/data.gov connector (datasets, resources, organizations, groups)
 source/docker           Docker connector (containers, images, volumes, networks), local unix socket
+source/git              Git connector (commits, branches, tags, status, files) over the local `git` binary (argv exec, no shell)
 source/slack            Slack connector (channels, users, messages, search), Web API
 source/newrelic         New Relic connector (dynamic NRDB event types + accounts/entities/alerts/issues), NerdGraph, config-only via `type: newrelic`
 source/postgres         Postgres connector (dynamic; SQL push-down), config-only via `type: postgres`

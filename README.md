@@ -68,7 +68,7 @@ to `~/dfetch.yaml` (see [Configuration](#configuration)).
 
 ## Connectors
 
-dfetch ships with eight connectors — five built in (no configuration) plus
+dfetch ships with nine connectors — six built in (no configuration) plus
 configured PostgreSQL, New Relic, and Jira `type`s:
 
 | schema     | source                              | tables                                                                        |
@@ -78,6 +78,7 @@ configured PostgreSQL, New Relic, and Jira `type`s:
 | `datagov`  | data.gov / CKAN                     | datasets, resources, organizations, groups                                    |
 | `docker`   | Docker Engine API                   | containers, images, volumes, networks                                         |
 | `slack`    | Slack Web API                       | channels, users, messages, search                                             |
+| `git`      | local git repository                | commits, branches, tags, status, files                                        |
 | `postgres` | PostgreSQL (config `type`)          | any table (dynamic discovery)                                                 |
 | `newrelic` | New Relic NerdGraph (config `type`) | any NRDB event type (dynamic) + accounts, entities, alerts, issues, incidents |
 | `jira`     | Jira Cloud REST API (config `type`) | issues, projects, comments                                                    |

@@ -21,6 +21,7 @@ source/github           GitHub connector (issues/pulls/repos/commits/releases/wo
 source/jaeger           Jaeger connector (spans/services/operations), api_v3
 source/ckan             CKAN/data.gov connector (datasets/resources/organizations/groups), Action API
 source/docker           Docker connector (containers/images/volumes/networks), Engine API over the local unix socket, stdlib net/http
+source/git              Git connector (commits/branches/tags/status/files), local `git` binary via argv exec (no shell), repo from cwd or params.repo
 source/slack            Slack connector (channels/users/messages/search), Web API, stdlib net/http; auth via $SLACK_TOKEN or params.auth_header_func/auth_header_command (full header, verbatim); browser xoxc tokens also need the "d" cookie via $SLACK_COOKIE (bare value) or params.cookie_func/cookie_command (full Cookie header, verbatim)
 source/newrelic         New Relic connector (dynamic NRDB event types via NRQL + curated accounts/entities/alerts/issues tables), NerdGraph GraphQL, config-only; auth via $NEW_RELIC_API_KEY (User key)
 source/postgres         Postgres connector (dynamic; SQL push-down via database/sql + pgx), config-only

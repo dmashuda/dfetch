@@ -11,7 +11,7 @@ import (
 // Every default type — builtin and config-only — builds from the registry.
 func TestDefaultRegistryKnowsAllTypes(t *testing.T) {
 	reg := DefaultRegistry()
-	for _, typeName := range []string{"datagov", "docker", "github", "jaeger", "slack"} {
+	for _, typeName := range []string{"datagov", "docker", "git", "github", "jaeger", "slack"} {
 		c, err := reg.Build(typeName, nil)
 		require.NoError(t, err, typeName)
 		assert.NotNil(t, c, typeName)
@@ -29,10 +29,10 @@ func TestDefaultRegistryKnowsAllTypes(t *testing.T) {
 func TestNewBuiltinsInstantiatesEverySchema(t *testing.T) {
 	conns, err := NewBuiltins()
 	require.NoError(t, err)
-	for _, schema := range []string{"datagov", "docker", "github", "jaeger", "slack"} {
+	for _, schema := range []string{"datagov", "docker", "git", "github", "jaeger", "slack"} {
 		assert.Contains(t, conns, schema)
 	}
-	assert.Len(t, conns, 5)
+	assert.Len(t, conns, 6)
 }
 
 // DefaultOptions reproduces the stock CLI setup: an engine where the builtin
