@@ -51,7 +51,7 @@
           pname = "dfetch";
           inherit version;
           src = ./.;
-          vendorHash = "sha256-w3e6eJpEHq6kk+xVeEiwkZrk/TA8vKLRomVsRm84quI=";
+          vendorHash = "sha256-rHrSrhtgQtn9S6aZ1LiimwFgHrYr2APDLzfYrn4OMoo=";
           # mattn/go-sqlite3 bundles its own SQLite C source, so cgo needs only a
           # C compiler (provided by stdenv); no system sqlite dependency.
           env.CGO_ENABLED = "1";
