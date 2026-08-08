@@ -11,9 +11,6 @@ updates:
       go-dependencies:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -22,6 +19,10 @@ updates:
     open-pull-requests-limit: 10
     cooldown:
       default-days: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "nix"
     directory: "/"
@@ -30,3 +31,7 @@ updates:
     open-pull-requests-limit: 10
     cooldown:
       default-days: 3
+    groups:
+      nix-dependencies:
+        patterns:
+          - "*"
